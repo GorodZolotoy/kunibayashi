@@ -430,6 +430,39 @@ function parseScheduleText(value) {
     });
 }
 
+function normalizeWeekdayIndexes(value) {
+  const source = Array.isArray(value) ? value : [];
+  const indexes = source
+    .map((item) => Number(item))
+    .filter((item) => Number.isInteger(item) && item >= 0 && item <= 6);
+  return indexes.length ? Array.from(new Set(indexes)) : [0, 1, 2, 3, 4, 5, 6];
+}
+
+function calendarBatchTargets(calendarDays, body) {
+  const days = Array.isArray(calendarDays) ? calendarDays : [];
+  const startId = normalizeCalendarDayId(body.startDayId || days[0]?.id);
+  const endId = normalizeCalendarDayId(body.endDayId || startId);
+  const startIndex = days.findIndex((day) => day.id === startId);
+  const endIndex = days.findIndex((day) => day.id === endId);
+  if (startIndex < 0 || endIndex < 0) {
+    return { error: "批量范围内包含不存在的日期。" };
+  }
+  const from = Math.min(startIndex, endIndex);
+  const to = Math.max(startIndex, endIndex);
+  const weekdayIndexes = normalizeWeekdayIndexes(body.weekdayIndexes);
+  const targets = days
+    .slice(from, to + 1)
+    .filter((day) => weekdayIndexes.includes(Number(day.weekdayIndex)));
+  return {
+    targets,
+    from,
+    to,
+    startDay: days[from],
+    endDay: days[to],
+    weekdayIndexes
+  };
+}
+
 function normalizeCalendarEvents(events) {
   if (!Array.isArray(events)) return [];
   return events.map((event, index) => ({
@@ -1099,6 +1132,54 @@ async function routeApi(req, res, url) {
     state.settings.schoolDay = calendarDayDisplay(day);
     writeState(state);
     sendJson(res, 200, publicState(state));
+    return;
+  }
+
+  if (req.method === "PATCH" && url.pathname === "/api/calendar/batch") {
+    if (!requireAdmin(req, res)) return;
+    const batch = calendarBatchTargets(state.calendarDays, body);
+    if (batch.error) return sendJson(res, 400, { error: batch.error });
+    if (!batch.targets.length) return sendJson(res, 400, { error: "没有日期符合这次批量条件。" });
+
+    const updateSchedule = body.updateSchedule !== false;
+    const noteMode = ["keep", "replace", "append"].includes(body.noteMode) ? body.noteMode : "keep";
+    const note = String(body.note || "").trim();
+    if (!updateSchedule && noteMode === "keep") {
+      return sendJson(res, 400, { error: "请选择要批量修改的内容。" });
+    }
+
+    const nextSchedule = updateSchedule ? parseScheduleText(body.scheduleText) : null;
+    const label = `${calendarDayDisplay(batch.startDay)} - ${calendarDayDisplay(batch.endDay)}`;
+    pushUndo(state, "batch_calendar_schedule", `批量编制课程表：${batch.targets.length} 天`, ["calendarDays"], {
+      startDayId: batch.startDay.id,
+      endDayId: batch.endDay.id,
+      weekdayIndexes: batch.weekdayIndexes,
+      updateSchedule,
+      noteMode
+    });
+
+    for (const day of batch.targets) {
+      if (updateSchedule) {
+        day.schedule = nextSchedule.map((item, index) => ({
+          ...item,
+          id: `${day.id}_${index + 1}`
+        }));
+      }
+      if (noteMode === "replace") {
+        day.note = note;
+      } else if (noteMode === "append" && note) {
+        day.note = [day.note, note].filter(Boolean).join(" / ");
+      }
+    }
+
+    writeState(state);
+    const payload = publicState(state);
+    payload.batchResult = {
+      updatedCount: batch.targets.length,
+      rangeLabel: label,
+      updatedDayIds: batch.targets.map((day) => day.id)
+    };
+    sendJson(res, 200, payload);
     return;
   }
 

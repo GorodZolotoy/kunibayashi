@@ -85,6 +85,13 @@ function bindGlobalEvents() {
       if (day) setSelectedCalendarMonth(day.month);
       renderGm();
     }
+    if (event.target?.id === "batch-template" || event.target?.id === "batch-copy-day") {
+      populateBatchScheduleTemplate();
+      updateBatchPreview();
+    }
+    if (event.target?.id?.startsWith("batch-") || event.target?.classList?.contains("batch-weekday")) {
+      updateBatchPreview();
+    }
   });
 
   els.actorSelect.addEventListener("change", () => {
@@ -112,6 +119,7 @@ async function handleAction(target) {
   if (action === "select-calendar-day") return selectCalendarDay(target.dataset.dayId);
   if (action === "save-current-calendar-day") return saveCurrentCalendarDay();
   if (action === "save-calendar-schedule") return saveCalendarSchedule();
+  if (action === "apply-calendar-batch") return applyCalendarBatch();
   if (action === "create-calendar-event") return createCalendarEvent();
   if (action === "trigger-calendar-event") return triggerCalendarEvent(target.dataset.dayId, target.dataset.eventId);
   if (action === "delete-calendar-event") return deleteCalendarEvent(target.dataset.dayId, target.dataset.eventId);
@@ -880,6 +888,79 @@ function renderCalendarEventManager(days, gmDay) {
   `;
 }
 
+function renderCalendarBatchComposer(days) {
+  const current = currentCalendarDay() || days[0];
+  const monthDays = days.filter((day) => Number(day.month) === Number(current?.month));
+  const defaultEnd = monthDays[monthDays.length - 1] || current || days[days.length - 1];
+  const previewCount = calendarBatchTargetDays(days, current?.id, defaultEnd?.id, [0, 1, 2, 3, 4, 5, 6]).length;
+  return `
+    <section class="gm-wide">
+      <div>
+        <div class="section-title">批量编制课程表</div>
+        <div class="meta">按日期范围和星期一次套用课程表；批量操作会进入 GM 撤销。</div>
+      </div>
+      <div class="form-grid">
+        <div class="two-col">
+          <label>开始日期
+            <select id="batch-start-day">
+              ${renderDayOptions(days, current?.id)}
+            </select>
+          </label>
+          <label>结束日期
+            <select id="batch-end-day">
+              ${renderDayOptions(days, defaultEnd?.id)}
+            </select>
+          </label>
+        </div>
+        <div class="batch-weekdays" role="group" aria-label="适用星期">
+          ${["一", "二", "三", "四", "五", "六", "日"].map((label, index) => `
+            <label class="weekday-option">
+              <input class="batch-weekday" type="checkbox" value="${index}" checked>
+              <span>周${label}</span>
+            </label>
+          `).join("")}
+        </div>
+        <div class="two-col">
+          <label>课程模板
+            <select id="batch-template">
+              <option value="custom">手动输入</option>
+              <option value="copy_day">复制指定日期</option>
+              <option value="holiday">休校日</option>
+              <option value="exam">考试日</option>
+              <option value="club">社团 / 自由活动日</option>
+              <option value="empty">清空课程表</option>
+            </select>
+          </label>
+          <label>复制来源
+            <select id="batch-copy-day">
+              ${renderDayOptions(days, current?.id)}
+            </select>
+          </label>
+        </div>
+        <label class="checkbox-line">
+          <input id="batch-update-schedule" type="checkbox" checked>
+          <span>覆盖目标日期的课程表</span>
+        </label>
+        <textarea id="batch-schedule-text" class="schedule-editor compact-editor" placeholder="08:20 | 朝会 | 1-A 教室 | 出席确认"></textarea>
+        <div class="two-col">
+          <label>备注处理
+            <select id="batch-note-mode">
+              <option value="keep">不改备注</option>
+              <option value="replace">替换备注</option>
+              <option value="append">追加备注</option>
+            </select>
+          </label>
+          <label>备注内容 <input id="batch-note" placeholder="例如：期中考试周"></label>
+        </div>
+        <div class="form-row batch-actions">
+          <button class="primary-button" type="button" data-action="apply-calendar-batch">批量套用</button>
+          <div id="batch-preview" class="hint">预计影响 ${previewCount} 天</div>
+        </div>
+      </div>
+    </section>
+  `;
+}
+
 function renderRelationshipGraph(chars) {
   const relationships = stateBag.data.relationships || [];
   const counts = chars.map((character) => {
@@ -1008,6 +1089,7 @@ function renderGm() {
         </div>
       </section>
 
+      ${renderCalendarBatchComposer(days)}
       ${renderRelationshipGraph(chars)}
       ${renderGmEditLog()}
 
@@ -1272,6 +1354,39 @@ async function saveCalendarSchedule() {
   localStorage.setItem("kokubayashi.calendarDayId", dayId);
   localStorage.setItem("kokubayashi.gmScheduleDayId", dayId);
   showNotice("课程表已保存。");
+  render();
+}
+
+async function applyCalendarBatch() {
+  const startDayId = document.getElementById("batch-start-day")?.value;
+  const endDayId = document.getElementById("batch-end-day")?.value;
+  const weekdayIndexes = selectedBatchWeekdayIndexes();
+  const updateSchedule = document.getElementById("batch-update-schedule")?.checked !== false;
+  const noteMode = document.getElementById("batch-note-mode")?.value || "keep";
+  if (!startDayId || !endDayId) return showNotice("请选择批量范围。");
+  if (!weekdayIndexes.length) return showNotice("请至少选择一个适用星期。");
+  if (!updateSchedule && noteMode === "keep") return showNotice("请选择要批量修改的内容。");
+
+  const template = document.getElementById("batch-template")?.value || "custom";
+  const scheduleText = resolveBatchScheduleText();
+  if (updateSchedule && !scheduleText.trim() && template !== "empty") {
+    return showNotice("请填写课程表，或选择“清空课程表”模板。");
+  }
+  stateBag.data = await api("/api/calendar/batch", {
+    method: "PATCH",
+    admin: true,
+    body: {
+      startDayId,
+      endDayId,
+      weekdayIndexes,
+      updateSchedule,
+      scheduleText,
+      noteMode,
+      note: document.getElementById("batch-note")?.value
+    }
+  });
+  const result = stateBag.data.batchResult;
+  showNotice(`批量编制已完成：${result?.updatedCount || 0} 天。`);
   render();
 }
 
@@ -1678,6 +1793,75 @@ function renderDayOptions(days, selectedId) {
       .join("");
     return `<optgroup label="${escapeAttr(month.label)}">${options}</optgroup>`;
   }).join("");
+}
+
+function calendarBatchTargetDays(days, startDayId, endDayId, weekdayIndexes) {
+  const startIndex = days.findIndex((day) => day.id === normalizeCalendarDayIdClient(startDayId));
+  const endIndex = days.findIndex((day) => day.id === normalizeCalendarDayIdClient(endDayId));
+  if (startIndex < 0 || endIndex < 0) return [];
+  const from = Math.min(startIndex, endIndex);
+  const to = Math.max(startIndex, endIndex);
+  const allowed = new Set(weekdayIndexes.length ? weekdayIndexes.map(Number) : [0, 1, 2, 3, 4, 5, 6]);
+  return days.slice(from, to + 1).filter((day) => allowed.has(Number(day.weekdayIndex)));
+}
+
+function selectedBatchWeekdayIndexes() {
+  return [...document.querySelectorAll(".batch-weekday:checked")]
+    .map((item) => Number(item.value))
+    .filter((item) => Number.isInteger(item) && item >= 0 && item <= 6);
+}
+
+function batchTemplateText(template) {
+  const templates = {
+    holiday: "全天 | 休校 | 校外 | 无正式课程",
+    exam: [
+      "08:20 | 朝会 | 1-A 教室 | 考试说明",
+      "09:00 | 第一节考试 | 指定教室 |",
+      "10:30 | 第二节考试 | 指定教室 |",
+      "12:00 | 午休 | 食堂 |",
+      "13:00 | 第三节考试 | 指定教室 |"
+    ].join("\n"),
+    club: [
+      "10:00 | 社团活动 | 校内 | 参加者确认",
+      "13:00 | 自由活动 | 校内 |",
+      "15:30 | 归寮确认 | 宿舍 / 校门 |"
+    ].join("\n"),
+    empty: ""
+  };
+  return templates[template] ?? "";
+}
+
+function resolveBatchScheduleText() {
+  const template = document.getElementById("batch-template")?.value || "custom";
+  if (template === "copy_day") {
+    const sourceDay = getCalendarDay(document.getElementById("batch-copy-day")?.value);
+    return scheduleToText(sourceDay?.schedule || []);
+  }
+  if (template !== "custom") return batchTemplateText(template);
+  return document.getElementById("batch-schedule-text")?.value || "";
+}
+
+function populateBatchScheduleTemplate() {
+  const textarea = document.getElementById("batch-schedule-text");
+  if (!textarea) return;
+  const template = document.getElementById("batch-template")?.value || "custom";
+  if (template === "custom") return;
+  textarea.value = resolveBatchScheduleText();
+}
+
+function updateBatchPreview() {
+  const preview = document.getElementById("batch-preview");
+  if (!preview) return;
+  const weekdayIndexes = selectedBatchWeekdayIndexes();
+  const targets = weekdayIndexes.length
+    ? calendarBatchTargetDays(
+      calendarDays(),
+      document.getElementById("batch-start-day")?.value,
+      document.getElementById("batch-end-day")?.value,
+      weekdayIndexes
+    )
+    : [];
+  preview.textContent = `预计影响 ${targets.length} 天`;
 }
 
 function scheduleToText(schedule) {
