@@ -10,10 +10,10 @@ const STATE_FILE = path.join(DATA_DIR, "state.json");
 const PORT = Number(process.env.PORT || 4173);
 const HOST = process.env.HOST || "0.0.0.0";
 const GM_PIN = process.env.GM_PIN || "gm";
-const MAX_JSON_BODY_BYTES = 8 * 1024 * 1024;
-const MAX_AVATAR_DATA_URL_LENGTH = 650000;
-const MAX_EMOJI_DATA_URL_LENGTH = 350000;
-const MAX_CHAT_IMAGE_DATA_URL_LENGTH = 2800000;
+const MAX_JSON_BODY_BYTES = 24 * 1024 * 1024;
+const MAX_AVATAR_DATA_URL_LENGTH = 2500000;
+const MAX_EMOJI_DATA_URL_LENGTH = 1000000;
+const MAX_CHAT_IMAGE_DATA_URL_LENGTH = 9000000;
 
 const MIME = {
   ".html": "text/html; charset=utf-8",
@@ -142,12 +142,13 @@ function createInitialState() {
       }
     ],
     emojis: defaultEmojis(),
+    relationships: [],
     updatedAt: now
   };
 }
 
 function normalizeState(state) {
-  state.version = Math.max(Number(state.version || 1), 2);
+  state.version = Math.max(Number(state.version || 1), 3);
   state.settings ||= {};
   state.settings.gameTime ||= "开学首日 18:12";
   state.settings.schoolDay ||= "周一";
@@ -158,6 +159,7 @@ function normalizeState(state) {
   state.posts ||= [];
   state.messages ||= [];
   state.emojis ||= defaultEmojis();
+  state.relationships ||= [];
 
   for (const character of state.characters) {
     character.avatarText ||= avatarText(character.name);
@@ -168,8 +170,19 @@ function normalizeState(state) {
 
   for (const chat of state.chats) {
     chat.memberIds = unique(chat.memberIds || []);
+    chat.type ||= "group";
+    chat.createdBy ||= "";
     if (chat.id === "chat_1a") chat.isPublic = true;
   }
+
+  state.relationships = state.relationships.map((relationship) => ({
+    id: relationship.id || id("rel"),
+    requesterId: relationship.requesterId,
+    targetId: relationship.targetId,
+    status: ["pending", "accepted", "rejected"].includes(relationship.status) ? relationship.status : "pending",
+    createdAt: relationship.createdAt || new Date().toISOString(),
+    updatedAt: relationship.updatedAt || relationship.createdAt || new Date().toISOString()
+  })).filter((relationship) => relationship.requesterId && relationship.targetId);
 
   for (const post of state.posts) {
     post.metrics = normalizeMetrics(post.metrics);
@@ -421,6 +434,26 @@ function ensureChatAccess(req, res, chat, author) {
   return false;
 }
 
+function canDirectMessage(state, sourceId, targetId) {
+  if (sourceId === targetId) return true;
+  return state.relationships.some((relationship) => (
+    relationship.status === "accepted" &&
+    (
+      (relationship.requesterId === sourceId && relationship.targetId === targetId) ||
+      (relationship.requesterId === targetId && relationship.targetId === sourceId)
+    )
+  ));
+}
+
+function directChatFor(state, firstId, secondId) {
+  return state.chats.find((chat) => (
+    chat.type === "direct" &&
+    chat.memberIds.length === 2 &&
+    chat.memberIds.includes(firstId) &&
+    chat.memberIds.includes(secondId)
+  ));
+}
+
 function normalizeHandle(value, fallbackName) {
   const raw = String(value || makeHandle(fallbackName)).replace(/^@/, "").trim();
   const compact = raw || makeHandle(fallbackName);
@@ -630,7 +663,7 @@ async function routeApi(req, res, url) {
     state.settings.feedName = String(body.feedName || state.settings.feedName).trim();
     state.settings.chatName = String(body.chatName || state.settings.chatName).trim();
     writeState(state);
-    sendJson(res, 200, state);
+    sendJson(res, 200, publicState(state));
     return;
   }
 
@@ -649,7 +682,7 @@ async function routeApi(req, res, url) {
     character.note = String(body.note || "").trim();
     state.characters.push(character);
     writeState(state);
-    sendJson(res, 201, state);
+    sendJson(res, 201, publicState(state));
     return;
   }
 
@@ -671,7 +704,115 @@ async function routeApi(req, res, url) {
     if (body.note !== undefined) character.note = String(body.note).trim();
     if (body.active !== undefined) character.active = Boolean(body.active);
     writeState(state);
-    sendJson(res, 200, state);
+    sendJson(res, 200, publicState(state));
+    return;
+  }
+
+  if (req.method === "POST" && url.pathname === "/api/follows") {
+    const requester = authorizeAuthor(req, res, state, body.requesterId);
+    const target = findCharacter(state, body.targetId);
+    if (!requester) return;
+    if (!target) return sendJson(res, 400, { error: "Target account not found." });
+    if (requester.id === target.id) return sendJson(res, 400, { error: "You cannot follow yourself." });
+
+    const existing = state.relationships.find((relationship) => (
+      relationship.requesterId === requester.id &&
+      relationship.targetId === target.id &&
+      relationship.status !== "rejected"
+    ));
+    if (existing) {
+      sendJson(res, 200, publicState(state));
+      return;
+    }
+
+    state.relationships.push({
+      id: id("rel"),
+      requesterId: requester.id,
+      targetId: target.id,
+      status: "pending",
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString()
+    });
+    writeState(state);
+    sendJson(res, 201, publicState(state));
+    return;
+  }
+
+  if (req.method === "PATCH" && url.pathname.startsWith("/api/follows/")) {
+    if (!requireAdmin(req, res)) return;
+    const relationshipId = decodeURIComponent(url.pathname.split("/").pop());
+    const relationship = state.relationships.find((item) => item.id === relationshipId);
+    if (!relationship) return sendJson(res, 404, { error: "Follow request not found." });
+    if (!["accepted", "rejected"].includes(body.status)) {
+      return sendJson(res, 400, { error: "Follow status must be accepted or rejected." });
+    }
+    relationship.status = body.status;
+    relationship.updatedAt = new Date().toISOString();
+    writeState(state);
+    sendJson(res, 200, publicState(state));
+    return;
+  }
+
+  if (req.method === "POST" && url.pathname === "/api/direct-chats") {
+    const requester = authorizeAuthor(req, res, state, body.requesterId);
+    const target = findCharacter(state, body.targetId);
+    if (!requester) return;
+    if (!target) return sendJson(res, 400, { error: "Target account not found." });
+    if (requester.id === target.id) return sendJson(res, 400, { error: "Choose another account for a direct chat." });
+    if (!isAdmin(req) && !canDirectMessage(state, requester.id, target.id)) {
+      return sendJson(res, 403, { error: "GM must approve the follow request before private messages are allowed." });
+    }
+
+    let chat = directChatFor(state, requester.id, target.id);
+    if (!chat) {
+      chat = {
+        id: id("chat"),
+        name: `${requester.name} / ${target.name}`,
+        type: "direct",
+        memberIds: [requester.id, target.id],
+        isPublic: false,
+        createdBy: requester.id,
+        createdAt: new Date().toISOString()
+      };
+      state.chats.push(chat);
+      writeState(state);
+    }
+
+    sendJson(res, 201, { state: publicState(state), chatId: chat.id });
+    return;
+  }
+
+  if (req.method === "POST" && url.pathname === "/api/player-chats") {
+    const creator = authorizeAuthor(req, res, state, body.creatorId);
+    if (!creator) return;
+
+    const name = String(body.name || "").trim().slice(0, 80);
+    if (!name) return sendJson(res, 400, { error: "Chat name is required." });
+
+    const requestedMembers = unique(Array.isArray(body.memberIds) ? body.memberIds : []);
+    const memberIds = unique([creator.id, ...requestedMembers]);
+    const invalidMember = memberIds.find((memberId) => !findCharacter(state, memberId));
+    if (invalidMember) return sendJson(res, 400, { error: "One or more chat members could not be found." });
+
+    if (!isAdmin(req)) {
+      const blockedMember = memberIds.find((memberId) => memberId !== creator.id && !canDirectMessage(state, creator.id, memberId));
+      if (blockedMember) {
+        return sendJson(res, 403, { error: "GM must approve follows before those accounts can join a private chat." });
+      }
+    }
+
+    const chat = {
+      id: id("chat"),
+      name,
+      type: "group",
+      memberIds,
+      isPublic: false,
+      createdBy: creator.id,
+      createdAt: new Date().toISOString()
+    };
+    state.chats.push(chat);
+    writeState(state);
+    sendJson(res, 201, { state: publicState(state), chatId: chat.id });
     return;
   }
 
@@ -690,7 +831,7 @@ async function routeApi(req, res, url) {
       replies: []
     });
     writeState(state);
-    sendJson(res, 201, state);
+    sendJson(res, 201, publicState(state));
     return;
   }
 
@@ -704,7 +845,7 @@ async function routeApi(req, res, url) {
     if (req.method === "POST" && action === "like") {
       post.metrics.likes = clampInt(post.metrics.likes, 0) + 1;
       writeState(state);
-      sendJson(res, 200, state);
+      sendJson(res, 200, publicState(state));
       return;
     }
 
@@ -721,7 +862,7 @@ async function routeApi(req, res, url) {
         createdAt: new Date().toISOString()
       });
       writeState(state);
-      sendJson(res, 201, state);
+      sendJson(res, 201, publicState(state));
       return;
     }
 
@@ -732,7 +873,7 @@ async function routeApi(req, res, url) {
       if (body.gameTime !== undefined) post.gameTime = String(body.gameTime).trim();
       if (body.metrics !== undefined) post.metrics = normalizeMetrics(body.metrics);
       writeState(state);
-      sendJson(res, 200, state);
+      sendJson(res, 200, publicState(state));
       return;
     }
 
@@ -740,7 +881,7 @@ async function routeApi(req, res, url) {
       if (!requireAdmin(req, res)) return;
       state.posts = state.posts.filter((item) => item.id !== postId);
       writeState(state);
-      sendJson(res, 200, state);
+      sendJson(res, 200, publicState(state));
       return;
     }
   }
@@ -756,10 +897,11 @@ async function routeApi(req, res, url) {
       type: body.type === "direct" ? "direct" : "group",
       memberIds,
       isPublic: Boolean(body.isPublic),
+      createdBy: "",
       createdAt: new Date().toISOString()
     });
     writeState(state);
-    sendJson(res, 201, state);
+    sendJson(res, 201, publicState(state));
     return;
   }
 
@@ -771,8 +913,9 @@ async function routeApi(req, res, url) {
     if (body.name !== undefined) chat.name = String(body.name).trim() || chat.name;
     if (body.memberIds !== undefined) chat.memberIds = unique(Array.isArray(body.memberIds) ? body.memberIds : []);
     if (body.isPublic !== undefined) chat.isPublic = Boolean(body.isPublic);
+    if (body.type !== undefined) chat.type = body.type === "direct" ? "direct" : "group";
     writeState(state);
-    sendJson(res, 200, state);
+    sendJson(res, 200, publicState(state));
     return;
   }
 
@@ -808,7 +951,7 @@ async function routeApi(req, res, url) {
       createdAt: new Date().toISOString()
     });
     writeState(state);
-    sendJson(res, 201, state);
+    sendJson(res, 201, publicState(state));
     return;
   }
 

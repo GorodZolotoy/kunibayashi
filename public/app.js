@@ -85,6 +85,11 @@ async function handleAction(target) {
   if (action === "update-avatar") return updateAvatar();
   if (action === "upload-emoji") return uploadEmoji();
   if (action === "insert-emoji") return insertEmoji(target.dataset.target, target.dataset.value);
+  if (action === "request-follow") return requestFollow();
+  if (action === "approve-follow") return updateFollow(target.dataset.followId, "accepted");
+  if (action === "reject-follow") return updateFollow(target.dataset.followId, "rejected");
+  if (action === "open-direct-chat") return openDirectChat();
+  if (action === "create-player-chat") return createPlayerPrivateChat();
 }
 
 async function refresh(forceRender) {
@@ -236,6 +241,52 @@ function renderReply(reply) {
   `;
 }
 
+function renderPlayerChatTools() {
+  if (stateBag.gmUnlocked) return "";
+  const actor = currentActor();
+  if (!actor) {
+    return `
+      <div class="chat-tools-panel">
+        <div class="mini-title">私聊 / 关注</div>
+        <div class="hint">先创建或登录玩家账号。</div>
+      </div>
+    `;
+  }
+
+  const candidates = contactCandidates();
+  const contacts = acceptedContacts();
+  const targetOptions = candidates.map((character) => `
+    <option value="${character.id}">${escapeHtml(character.name)} ${escapeHtml(character.handle)} - ${relationshipLabel(character.id)}</option>
+  `).join("");
+  const memberOptions = contacts.map((character) => `
+    <label class="member-option compact">
+      <input type="checkbox" class="private-member-checkbox" value="${character.id}">
+      <span>${escapeHtml(character.name)}</span>
+      <span class="type-pill">${typeLabel(character)}</span>
+    </label>
+  `).join("");
+
+  return `
+    <div class="chat-tools-panel">
+      <div class="mini-title">私聊 / 关注</div>
+      <select id="follow-target" ${candidates.length ? "" : "disabled"}>
+        ${targetOptions || `<option value="">没有可关注账号</option>`}
+      </select>
+      <div class="form-row tight">
+        <button class="secondary-button" type="button" data-action="request-follow" ${candidates.length ? "" : "disabled"}>请求关注</button>
+        <button class="primary-button" type="button" data-action="open-direct-chat" ${candidates.length ? "" : "disabled"}>打开私聊</button>
+      </div>
+      <div class="hint">私聊需要 GM 批准关注后才能开启。</div>
+      <div class="mini-title">玩家私密群聊</div>
+      <input id="private-chat-name" maxlength="80" placeholder="群聊名称">
+      <div class="member-picker compact-picker">
+        ${memberOptions || `<div class="hint padded">暂无已批准联系人。</div>`}
+      </div>
+      <button class="secondary-button" type="button" data-action="create-player-chat" ${contacts.length ? "" : "disabled"}>创建私密群聊</button>
+    </div>
+  `;
+}
+
 function renderChats() {
   const chats = visibleChats();
   const active = chats.find((chat) => chat.id === stateBag.activeChatId);
@@ -244,6 +295,7 @@ function renderChats() {
   els.viewRoot.innerHTML = `
     <div class="chat-layout">
       <aside class="room-list">
+        ${renderPlayerChatTools()}
         ${chats.map((chat) => `
           <button class="room-button ${chat.id === stateBag.activeChatId ? "active" : ""}" type="button" data-action="select-chat" data-chat-id="${chat.id}">
             <div class="name">${escapeHtml(chat.name)}</div>
@@ -352,6 +404,26 @@ function renderEmojiBar(targetId) {
   `;
 }
 
+function renderFollowRequest(relationship) {
+  const requester = getActor(relationship.requesterId);
+  const target = getActor(relationship.targetId);
+  return `
+    <div class="follow-row">
+      <div class="follow-people">
+        ${renderAvatar(requester)}
+        <div class="name-block">
+          <div class="name">${escapeHtml(requester?.name || "Unknown")} → ${escapeHtml(target?.name || "Unknown")}</div>
+          <div class="handle">${escapeHtml(requester?.handle || "")} wants to follow ${escapeHtml(target?.handle || "")}</div>
+        </div>
+      </div>
+      <div class="form-row tight">
+        <button class="primary-button" type="button" data-action="approve-follow" data-follow-id="${relationship.id}">批准</button>
+        <button class="danger-button" type="button" data-action="reject-follow" data-follow-id="${relationship.id}">拒绝</button>
+      </div>
+    </div>
+  `;
+}
+
 function renderGm() {
   if (!stateBag.gmUnlocked) {
     els.viewRoot.innerHTML = `
@@ -367,6 +439,7 @@ function renderGm() {
   }
 
   const chars = stateBag.data.characters.filter((item) => item.active !== false);
+  const pendingFollows = (stateBag.data.relationships || []).filter((item) => item.status === "pending");
   els.viewRoot.innerHTML = `
     <div class="gm-grid">
       <section>
@@ -415,6 +488,13 @@ function renderGm() {
             `).join("")}
           </div>
           <button class="primary-button" type="button" data-action="create-chat">创建群聊</button>
+        </div>
+      </section>
+
+      <section>
+        <div class="section-title">关注审批</div>
+        <div class="follow-list">
+          ${pendingFollows.map(renderFollowRequest).join("") || `<div class="hint">暂无待审批关注。</div>`}
         </div>
       </section>
 
@@ -503,7 +583,7 @@ async function sendMessage() {
   const imageInput = document.getElementById("message-image");
   const imageFile = imageInput?.files?.[0];
   const attachment = imageFile
-    ? { type: "image", dataUrl: await fileToImageDataUrl(imageFile, 1400, 0.82), name: imageFile.name }
+    ? { type: "image", dataUrl: await fileToImageDataUrl(imageFile, 1400, 0.86, 8500000), name: imageFile.name }
     : null;
   if (!content && !attachment) return showNotice("消息内容或图片为空。");
   await api("/api/messages", {
@@ -574,7 +654,7 @@ async function createPlayerAccount() {
   const passcode = document.getElementById("account-passcode")?.value.trim();
   if (!passcode || passcode.length < 4) return showNotice("登录码至少 4 个字符。");
   const avatarFile = document.getElementById("account-avatar")?.files?.[0];
-  const avatarData = avatarFile ? await fileToImageDataUrl(avatarFile, 384, 0.86) : "";
+  const avatarData = avatarFile ? await fileToImageDataUrl(avatarFile, 384, 0.88, 2300000) : "";
   const result = await api("/api/player-accounts", {
     method: "POST",
     body: {
@@ -615,7 +695,7 @@ async function updateAvatar() {
   if (!currentActor()) return showNotice("请先选择玩家账号。");
   const file = document.getElementById("avatar-update-file")?.files?.[0];
   if (!file) return showNotice("请选择头像图片。");
-  const avatarData = await fileToImageDataUrl(file, 384, 0.86);
+  const avatarData = await fileToImageDataUrl(file, 384, 0.88, 2300000);
   await api(`/api/player-accounts/${encodeURIComponent(stateBag.actorId)}`, {
     method: "PATCH",
     body: { avatarData }
@@ -630,7 +710,7 @@ async function uploadEmoji() {
   const file = document.getElementById("emoji-file")?.files?.[0];
   if (!shortcode) return showNotice("请输入 emoji shortcode。");
   if (!file) return showNotice("请选择 emoji 图片。");
-  const imageData = await fileToImageDataUrl(file, 128, 0.88);
+  const imageData = await fileToImageDataUrl(file, 128, 0.9, 900000);
   await api("/api/emojis", {
     method: "POST",
     body: {
@@ -666,6 +746,61 @@ async function createChat() {
   await refresh(true);
 }
 
+async function requestFollow() {
+  if (!currentActor()) return showNotice("请先创建或登录玩家账号。");
+  const targetId = document.getElementById("follow-target")?.value;
+  if (!targetId) return showNotice("请选择想要关注的账号。");
+  stateBag.data = await api("/api/follows", {
+    method: "POST",
+    body: { requesterId: stateBag.actorId, targetId }
+  });
+  showNotice("关注请求已发送，等待 GM 批准。");
+  render();
+}
+
+async function updateFollow(followId, status) {
+  if (!followId) return;
+  stateBag.data = await api(`/api/follows/${encodeURIComponent(followId)}`, {
+    method: "PATCH",
+    admin: true,
+    body: { status }
+  });
+  showNotice(status === "accepted" ? "关注已批准，可以私聊了。" : "关注请求已拒绝。");
+  render();
+}
+
+async function openDirectChat() {
+  if (!currentActor()) return showNotice("请先创建或登录玩家账号。");
+  const targetId = document.getElementById("follow-target")?.value;
+  if (!targetId) return showNotice("请选择私聊对象。");
+  const result = await api("/api/direct-chats", {
+    method: "POST",
+    body: { requesterId: stateBag.actorId, targetId }
+  });
+  stateBag.data = result.state;
+  stateBag.activeChatId = result.chatId;
+  localStorage.setItem("kokubayashi.chatId", stateBag.activeChatId);
+  setTab("chats");
+  showNotice("私聊已打开。");
+}
+
+async function createPlayerPrivateChat() {
+  if (!currentActor()) return showNotice("请先创建或登录玩家账号。");
+  const name = document.getElementById("private-chat-name")?.value.trim();
+  const memberIds = Array.from(document.querySelectorAll(".private-member-checkbox:checked")).map((item) => item.value);
+  if (!name) return showNotice("请输入群聊名称。");
+  if (!memberIds.length) return showNotice("请选择至少一个已批准联系人。");
+  const result = await api("/api/player-chats", {
+    method: "POST",
+    body: { creatorId: stateBag.actorId, name, memberIds }
+  });
+  stateBag.data = result.state;
+  stateBag.activeChatId = result.chatId;
+  localStorage.setItem("kokubayashi.chatId", stateBag.activeChatId);
+  setTab("chats");
+  showNotice("私密群聊已创建。");
+}
+
 async function api(path, options = {}) {
   const headers = { "Content-Type": "application/json" };
   if ((stateBag.gmUnlocked || options.admin) && stateBag.gmPin) headers["X-GM-PIN"] = stateBag.gmPin;
@@ -696,6 +831,49 @@ function visibleChats() {
   if (stateBag.gmUnlocked) return chats;
   if (!stateBag.actorId) return chats.filter((chat) => chat.isPublic);
   return chats.filter((chat) => chat.isPublic || chat.memberIds.includes(stateBag.actorId));
+}
+
+function contactCandidates() {
+  const actor = currentActor();
+  if (!actor) return [];
+  return (stateBag.data?.characters || [])
+    .filter((character) => character.active !== false && character.id !== actor.id);
+}
+
+function acceptedContacts() {
+  const actor = currentActor();
+  if (!actor) return [];
+  return contactCandidates().filter((character) => canDirectMessageClient(actor.id, character.id));
+}
+
+function canDirectMessageClient(sourceId, targetId) {
+  if (sourceId === targetId) return true;
+  return (stateBag.data?.relationships || []).some((relationship) => (
+    relationship.status === "accepted" &&
+    (
+      (relationship.requesterId === sourceId && relationship.targetId === targetId) ||
+      (relationship.requesterId === targetId && relationship.targetId === sourceId)
+    )
+  ));
+}
+
+function relationshipLabel(targetId) {
+  const actor = currentActor();
+  if (!actor || !targetId) return "未关注";
+  const relationships = stateBag.data?.relationships || [];
+  if (canDirectMessageClient(actor.id, targetId)) return "已批准";
+  const outgoing = relationships.find((item) => item.requesterId === actor.id && item.targetId === targetId && item.status === "pending");
+  if (outgoing) return "等待 GM";
+  const incoming = relationships.find((item) => item.requesterId === targetId && item.targetId === actor.id && item.status === "pending");
+  if (incoming) return "对方请求中";
+  const rejected = relationships.find((item) => (
+    item.status === "rejected" &&
+    (
+      (item.requesterId === actor.id && item.targetId === targetId) ||
+      (item.requesterId === targetId && item.targetId === actor.id)
+    )
+  ));
+  return rejected ? "曾被拒绝" : "未关注";
 }
 
 function currentActor() {
@@ -781,35 +959,72 @@ function currentAccountToken() {
   return stateBag.accountTokens[stateBag.actorId] || "";
 }
 
-function fileToImageDataUrl(file, maxEdge, quality) {
+function fileToImageDataUrl(file, maxEdge, quality, maxLength = Infinity) {
   if (!file.type.startsWith("image/")) {
     throw new Error("请选择图片文件。");
   }
-  if (file.type === "image/gif") return readFileAsDataUrl(file);
+  if (file.type === "image/gif") return readFileAsDataUrl(file, maxLength);
 
   return new Promise((resolve, reject) => {
     const image = new Image();
+    const objectUrl = URL.createObjectURL(file);
     image.onload = () => {
-      const scale = Math.min(1, maxEdge / Math.max(image.naturalWidth, image.naturalHeight));
-      const width = Math.max(1, Math.round(image.naturalWidth * scale));
-      const height = Math.max(1, Math.round(image.naturalHeight * scale));
-      const canvas = document.createElement("canvas");
-      canvas.width = width;
-      canvas.height = height;
-      const context = canvas.getContext("2d");
-      context.drawImage(image, 0, 0, width, height);
-      URL.revokeObjectURL(image.src);
-      resolve(canvas.toDataURL("image/webp", quality));
+      try {
+        let edge = maxEdge;
+        let currentQuality = quality;
+        let result = "";
+
+        for (let attempt = 0; attempt < 14; attempt += 1) {
+          const scale = Math.min(1, edge / Math.max(image.naturalWidth, image.naturalHeight));
+          const width = Math.max(1, Math.round(image.naturalWidth * scale));
+          const height = Math.max(1, Math.round(image.naturalHeight * scale));
+          const canvas = document.createElement("canvas");
+          canvas.width = width;
+          canvas.height = height;
+          const context = canvas.getContext("2d");
+          context.fillStyle = "#ffffff";
+          context.fillRect(0, 0, width, height);
+          context.drawImage(image, 0, 0, width, height);
+          result = canvas.toDataURL("image/jpeg", currentQuality);
+          if (result.length <= maxLength) {
+            URL.revokeObjectURL(objectUrl);
+            resolve(result);
+            return;
+          }
+          if (currentQuality > 0.58) {
+            currentQuality = Math.max(0.58, currentQuality - 0.1);
+          } else {
+            edge = Math.max(240, Math.round(edge * 0.78));
+            currentQuality = Math.max(0.72, quality - 0.08);
+          }
+        }
+
+        URL.revokeObjectURL(objectUrl);
+        reject(new Error("图片太大，请换一张较小的图片。"));
+      } catch (error) {
+        URL.revokeObjectURL(objectUrl);
+        reject(error);
+      }
     };
-    image.onerror = () => reject(new Error("图片读取失败。"));
-    image.src = URL.createObjectURL(file);
+    image.onerror = () => {
+      URL.revokeObjectURL(objectUrl);
+      reject(new Error("图片读取失败。"));
+    };
+    image.src = objectUrl;
   });
 }
 
-function readFileAsDataUrl(file) {
+function readFileAsDataUrl(file, maxLength = Infinity) {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
-    reader.onload = () => resolve(String(reader.result || ""));
+    reader.onload = () => {
+      const result = String(reader.result || "");
+      if (result.length > maxLength) {
+        reject(new Error("图片太大，请换一张较小的图片。"));
+        return;
+      }
+      resolve(result);
+    };
     reader.onerror = () => reject(new Error("文件读取失败。"));
     reader.readAsDataURL(file);
   });

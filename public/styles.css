@@ -470,6 +470,31 @@ textarea {
   align-self: start;
 }
 
+.chat-tools-panel {
+  display: grid;
+  gap: 8px;
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: #fffaf0;
+}
+
+.form-row.tight {
+  gap: 6px;
+}
+
+.compact-picker {
+  max-height: 190px;
+}
+
+.member-option.compact {
+  padding: 7px 8px;
+}
+
+.padded {
+  padding: 10px;
+}
+
 .room-button {
   width: 100%;
   border: 1px solid transparent;
@@ -597,7 +622,8 @@ textarea {
 }
 
 .member-picker,
-.roster {
+.roster,
+.follow-list {
   max-height: 320px;
   overflow: auto;
   border: 1px solid var(--line);
@@ -629,6 +655,24 @@ textarea {
 
 .roster-row:last-child {
   border-bottom: 0;
+}
+
+.follow-row {
+  display: grid;
+  gap: 8px;
+  padding: 10px;
+  border-bottom: 1px solid var(--line);
+}
+
+.follow-row:last-child {
+  border-bottom: 0;
+}
+
+.follow-people {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
 }
 
 .type-pill {

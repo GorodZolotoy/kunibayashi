@@ -35,6 +35,8 @@ $env:GM_PIN="换成你的后台密码"; npm start
 - GM 后台：解锁后可切换任意角色身份。
 - GM 可调整帖子时间、点赞、转发、浏览数。
 - LINE 风格群聊：可用当前身份发消息，也可发送图片。
+- 玩家可发起关注请求，GM 批准后双方可以开私聊。
+- 玩家可用已批准联系人创建自己的私密群聊。
 - 通用 emoji 栏：内置常用 emoji，并支持上传自定义图片 emoji。
 - GM 可创建新角色、新群聊、调整游戏内时间。
 - 可导出 Markdown：`/api/export.md`。
@@ -50,7 +52,8 @@ $env:GM_PIN="换成你的后台密码"; npm start
   - `GM_PIN`: GM 后台密码
   - `DATA_DIR`: 可选，若 Railway 挂载 Volume，把它设为 Volume 路径
 
-如果不挂载持久化 Volume，Railway 重启后玩家账号、头像、聊天图片、自定义 emoji 和 `data/state.json` 都可能丢失。
+如果不挂载持久化 Volume，Railway 重启后玩家账号、头像、关注审批、私聊/私密群聊、聊天图片、自定义 emoji 和 `data/state.json` 都可能丢失。
+头像、聊天图片和自定义 emoji 会被浏览器压缩后以 data URL 存进 `state.json`；如果图片上传失败，通常是原图太大或 Railway 请求体限制过低，请优先使用较小图片并确认部署使用了当前版本。
 
 第一次部署时，如果没有现成的 `data/state.json`，系统会使用 `seed/state.json` 生成初始角色名册。
 

@@ -1,5 +1,5 @@
 {
-  "version": 2,
+  "version": 3,
   "settings": {
     "gameTime": "开学首日 18:12",
     "schoolDay": "周一",
@@ -650,7 +650,8 @@
         "char_ebf71cc17d68"
       ],
       "isPublic": true,
-      "createdAt": "2026-06-02T04:59:53.771Z"
+      "createdAt": "2026-06-02T04:59:53.771Z",
+      "createdBy": ""
     },
     {
       "id": "chat_dorm",
@@ -675,7 +676,8 @@
         "char_428c2d476d19"
       ],
       "isPublic": false,
-      "createdAt": "2026-06-02T04:59:53.771Z"
+      "createdAt": "2026-06-02T04:59:53.771Z",
+      "createdBy": ""
     }
   ],
   "posts": [
@@ -713,5 +715,6 @@
     }
   ],
   "updatedAt": "2026-06-02T04:59:53.772Z",
-  "emojis": []
+  "emojis": [],
+  "relationships": []
 }
