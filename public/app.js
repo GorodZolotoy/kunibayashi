@@ -136,6 +136,8 @@ async function handleAction(target) {
   if (action === "gm-undo") return gmUndo();
   if (action === "unlock-gm") return unlockGm();
   if (action === "lock-gm") return lockGm();
+  if (action === "export-markdown") return downloadGmMarkdown("/api/export.md", "kunibayashi-export");
+  if (action === "export-gm-chats") return downloadGmMarkdown("/api/gm/chats/export.md", "kunibayashi-chats");
   if (action === "save-settings") return saveSettings();
   if (action === "create-character") return createCharacter();
   if (action === "import-characters") return importCharacters();
@@ -148,6 +150,7 @@ async function handleAction(target) {
   if (action === "update-account-avatar" || action === "update-character-avatar") return updateCharacterAvatar(target.dataset.characterId);
   if (action === "save-character-tags") return saveCharacterTags(target.dataset.characterId);
   if (action === "delete-character") return deleteCharacter(target.dataset.characterId);
+  if (action === "delete-all-characters") return deleteAllCharacters();
   if (action === "create-chat") return createChat();
   if (action === "create-player-account") return createPlayerAccount();
   if (action === "login-player-account") return loginPlayerAccount();
@@ -1237,7 +1240,10 @@ function renderGm() {
             <button class="primary-button" type="button" data-action="save-settings">保存时间</button>
             <button class="ghost-button" type="button" data-action="lock-gm">锁定 GM</button>
           </div>
-          <a class="secondary-button export-link" href="/api/export.md" target="_blank" rel="noreferrer">导出 Markdown</a>
+          <div class="form-row">
+            <button class="secondary-button export-link" type="button" data-action="export-markdown">导出完整 Markdown</button>
+            <button class="secondary-button export-link" type="button" data-action="export-gm-chats">导出聊天 Markdown</button>
+          </div>
         </div>
       </section>
 
@@ -1328,21 +1334,31 @@ function renderGm() {
         </div>
       </section>
 
-      <section>
-        <div class="section-title">角色名册</div>
+      <section class="gm-wide">
+        <div class="roster-heading">
+          <div>
+            <div class="section-title">角色名册</div>
+            <div class="hint">${chars.length} 个 active 角色</div>
+          </div>
+          <button class="danger-button compact-action" type="button" data-action="delete-all-characters" ${chars.length ? "" : "disabled"}>删除全部角色</button>
+        </div>
         <div class="roster">
           ${chars.map((character) => `
             <div class="roster-row">
-              ${renderAvatar(character)}
-              <div class="name-block">
-                <div class="name">${escapeHtml(character.name)}</div>
-                <div class="handle">${escapeHtml(character.handle)}${character.type === "account" && character.username ? ` · ${escapeHtml(character.username)}` : ""}</div>
-                ${renderCharacterTags(character)}
+              <div class="roster-identity">
+                ${renderAvatar(character)}
+                <div class="name-block">
+                  <div class="name">${escapeHtml(character.name)}</div>
+                  <div class="handle">${escapeHtml(character.handle)}${character.type === "account" && character.username ? ` · ${escapeHtml(character.username)}` : ""}</div>
+                  ${renderCharacterTags(character)}
+                </div>
               </div>
               <div class="tag-editor">
-                <input id="character-tags-${escapeAttr(character.id)}" value="${escapeAttr(characterTagInputValue(character))}" placeholder="标签，用逗号分隔">
-                <button class="secondary-button compact-action" type="button" data-action="save-character-tags" data-character-id="${escapeAttr(character.id)}">保存标签</button>
-                <button class="danger-button compact-action" type="button" data-action="delete-character" data-character-id="${escapeAttr(character.id)}">删除</button>
+                <div class="roster-control-row">
+                  <input id="character-tags-${escapeAttr(character.id)}" value="${escapeAttr(characterTagInputValue(character))}" placeholder="标签，用逗号分隔">
+                  <button class="secondary-button compact-action" type="button" data-action="save-character-tags" data-character-id="${escapeAttr(character.id)}">保存标签</button>
+                  <button class="danger-button compact-action" type="button" data-action="delete-character" data-character-id="${escapeAttr(character.id)}">删除</button>
+                </div>
                 <div class="avatar-editor">
                   <label class="file-picker compact-file-picker">头像
                     <input id="character-avatar-${escapeAttr(character.id)}" class="character-avatar-input" data-character-id="${escapeAttr(character.id)}" type="file" accept="image/*">
@@ -1536,6 +1552,27 @@ function lockGm() {
   stateBag.gmUnlocked = false;
   localStorage.setItem("kokubayashi.gmUnlocked", "false");
   render();
+}
+
+async function downloadGmMarkdown(path, filenamePrefix) {
+  if (!stateBag.gmPin) return showNotice("请先解锁 GM。");
+  const response = await fetch(path, {
+    headers: { "X-GM-PIN": stateBag.gmPin }
+  });
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({}));
+    throw new Error(error.error || response.statusText || "导出失败。");
+  }
+  const blob = await response.blob();
+  const objectUrl = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = objectUrl;
+  link.download = `${filenamePrefix}-${new Date().toISOString().slice(0, 10)}.md`;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  setTimeout(() => URL.revokeObjectURL(objectUrl), 0);
+  showNotice("Markdown 导出已开始下载。");
 }
 
 async function saveSettings() {
@@ -1889,6 +1926,22 @@ async function deleteCharacter(characterId) {
     localStorage.removeItem("kokubayashi.actorId");
   }
   showNotice("角色已删除。需要的话可以用 GM 撤销。");
+  render();
+}
+
+async function deleteAllCharacters() {
+  const chars = (stateBag.data?.characters || []).filter((character) => character.active !== false);
+  if (!chars.length) return showNotice("没有可删除的角色。");
+  if (!window.confirm(`删除全部 ${chars.length} 个 active 角色？历史消息会保留，GM 撤销可以恢复。`)) return;
+  const result = await api("/api/characters", {
+    method: "DELETE",
+    admin: true
+  });
+  stateBag.data = result.state;
+  stateBag.actorId = "";
+  stateBag.profileId = "";
+  localStorage.removeItem("kokubayashi.actorId");
+  showNotice(`已删除 ${result.deleted?.length || chars.length} 个角色。需要的话可以用 GM 撤销。`);
   render();
 }
 

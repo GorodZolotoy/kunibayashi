@@ -1123,7 +1123,14 @@ async function routeApi(req, res, url) {
   }
 
   if (req.method === "GET" && url.pathname === "/api/export.md") {
+    if (!requireAdmin(req, res)) return;
     sendText(res, 200, exportMarkdown(state), "text/markdown; charset=utf-8");
+    return;
+  }
+
+  if (req.method === "GET" && url.pathname === "/api/gm/chats/export.md") {
+    if (!requireAdmin(req, res)) return;
+    sendText(res, 200, exportChatMarkdown(state), "text/markdown; charset=utf-8");
     return;
   }
 
@@ -1586,6 +1593,32 @@ async function routeApi(req, res, url) {
     state.characters.push(built.character);
     writeState(state);
     sendJson(res, 201, publicState(state));
+    return;
+  }
+
+  if (req.method === "DELETE" && url.pathname === "/api/characters") {
+    if (!requireAdmin(req, res)) return;
+    const characters = state.characters.filter((character) => character.active !== false);
+    if (!characters.length) return sendJson(res, 400, { error: "No active characters to delete." });
+
+    pushUndo(state, "delete_all_characters", `删除全部角色：${characters.length} 个`, ["characters", "chats", "relationships"], { count: characters.length });
+    const characterIds = new Set(characters.map((character) => character.id));
+    const now = new Date().toISOString();
+    for (const character of characters) {
+      character.active = false;
+      character.deletedAt = now;
+    }
+    for (const chat of state.chats) {
+      chat.memberIds = (chat.memberIds || []).filter((memberId) => !characterIds.has(memberId));
+    }
+    state.relationships = (state.relationships || []).filter((relationship) => (
+      !characterIds.has(relationship.requesterId) && !characterIds.has(relationship.targetId)
+    ));
+    writeState(state);
+    sendJson(res, 200, {
+      state: publicState(state),
+      deleted: characters.map((character) => ({ id: character.id, name: character.name, handle: character.handle, type: character.type }))
+    });
     return;
   }
 
@@ -2073,6 +2106,56 @@ function exportMarkdown(state) {
         ? `匿名${author ? `（${author.name}）` : ""}`
         : (author?.name || "Unknown");
       lines.push(`- ${message.gameTime} | ${authorLabel}：${message.content}`);
+      if (message.attachment?.type === "image") {
+        lines.push(`  - [图片] ${message.attachment.name || "image"}`);
+      }
+    }
+    lines.push("");
+  }
+
+  return `${lines.join("\n").trim()}\n`;
+}
+
+function exportChatMarkdown(state) {
+  const byId = new Map(state.characters.map((character) => [character.id, character]));
+  const currentDay = (state.calendarDays || []).find((day) => day.id === state.settings.currentDayId);
+  const lines = [
+    "# K-LINE 聊天导出",
+    "",
+    `- 游戏时间：${state.settings.gameTime || ""}`,
+    `- 当前日期：${currentDay ? `${currentDay.label} ${currentDay.dateLabel || ""}`.trim() : state.settings.schoolDay || ""}`,
+    `- 导出时间：${new Date().toLocaleString("zh-CN")}`,
+    ""
+  ];
+
+  const messagesByChat = new Map();
+  for (const message of [...(state.messages || [])].sort((a, b) => String(a.createdAt).localeCompare(String(b.createdAt)))) {
+    const list = messagesByChat.get(message.chatId) || [];
+    list.push(message);
+    messagesByChat.set(message.chatId, list);
+  }
+
+  const chats = [...(state.chats || [])].sort((a, b) => String(a.createdAt).localeCompare(String(b.createdAt)));
+  for (const chat of chats) {
+    const chatType = chat.type === "direct" ? "私聊" : (chat.isPublic ? "公开群聊" : "私密群聊");
+    const members = (chat.memberIds || []).map((memberId) => byId.get(memberId)?.name || memberId).filter(Boolean);
+    lines.push(`## ${chat.name}`, "");
+    lines.push(`- 类型：${chatType}`);
+    lines.push(`- 成员：${members.length ? members.join("、") : "未设置"}`, "");
+
+    const messages = messagesByChat.get(chat.id) || [];
+    if (!messages.length) {
+      lines.push("_没有消息记录。_", "");
+      continue;
+    }
+
+    for (const message of messages) {
+      const author = byId.get(message.authorId);
+      const authorLabel = message.isAnonymous
+        ? `匿名${author ? `（${author.name}）` : ""}`
+        : (author?.name || "Unknown");
+      const content = String(message.content || "").trim() || "[空消息]";
+      lines.push(`- ${message.gameTime || ""} | ${authorLabel}：${content}`);
       if (message.attachment?.type === "image") {
         lines.push(`  - [图片] ${message.attachment.name || "image"}`);
       }
