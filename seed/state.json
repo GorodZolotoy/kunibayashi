@@ -1,8 +1,8 @@
 {
-  "version": 4,
+  "version": 5,
   "settings": {
     "gameTime": "开学首日 18:12",
-    "schoolDay": "??",
+    "schoolDay": "周一",
     "feedName": "Kokubayashi SNS",
     "chatName": "K-LINE",
     "currentDayId": "day_mon"
@@ -721,325 +721,332 @@
   "calendarDays": [
     {
       "id": "day_mon",
-      "label": "??",
-      "dateLabel": "????",
+      "label": "周一",
+      "dateLabel": "开学首日",
       "note": "",
       "schedule": [
         {
           "id": "day_mon_1",
           "time": "08:20",
-          "subject": "??",
-          "location": "1-A ??",
-          "note": "????"
+          "subject": "朝会",
+          "location": "1-A 教室",
+          "note": "出席确认"
         },
         {
           "id": "day_mon_2",
           "time": "09:00",
-          "subject": "???",
-          "location": "1-A ??",
-          "note": "??? 1 ?"
+          "subject": "现代文",
+          "location": "1-A 教室",
+          "note": "课本第 1 章"
         },
         {
           "id": "day_mon_3",
           "time": "10:10",
-          "subject": "??",
-          "location": "1-A ??",
-          "note": "???"
+          "subject": "数学",
+          "location": "1-A 教室",
+          "note": "小测验"
         },
         {
           "id": "day_mon_4",
           "time": "11:20",
-          "subject": "??",
-          "location": "1-A ??",
-          "note": "????"
+          "subject": "英语",
+          "location": "1-A 教室",
+          "note": "听力练习"
         },
         {
           "id": "day_mon_5",
           "time": "12:20",
-          "subject": "??",
-          "location": "?? / ??",
+          "subject": "午休",
+          "location": "中庭 / 食堂",
           "note": ""
         },
         {
           "id": "day_mon_6",
           "time": "13:20",
-          "subject": "??",
-          "location": "???",
-          "note": "???"
+          "subject": "体育",
+          "location": "体育馆",
+          "note": "运动服"
         },
         {
           "id": "day_mon_7",
           "time": "14:30",
-          "subject": "??",
-          "location": "1-A ??",
-          "note": "????"
+          "subject": "班会",
+          "location": "1-A 教室",
+          "note": "社团登记"
         }
-      ]
+      ],
+      "events": []
     },
     {
       "id": "day_tue",
-      "label": "??",
-      "dateLabel": "?????",
+      "label": "周二",
+      "dateLabel": "开学第二日",
       "note": "",
       "schedule": [
         {
           "id": "day_tue_1",
           "time": "08:20",
-          "subject": "??",
-          "location": "1-A ??",
+          "subject": "朝会",
+          "location": "1-A 教室",
           "note": ""
         },
         {
           "id": "day_tue_2",
           "time": "09:00",
-          "subject": "???",
-          "location": "1-A ??",
-          "note": "????"
+          "subject": "世界史",
+          "location": "1-A 教室",
+          "note": "古代文明"
         },
         {
           "id": "day_tue_3",
           "time": "10:10",
-          "subject": "??",
-          "location": "???",
-          "note": "????"
+          "subject": "化学",
+          "location": "实验室",
+          "note": "安全说明"
         },
         {
           "id": "day_tue_4",
           "time": "11:20",
-          "subject": "??",
-          "location": "1-A ??",
+          "subject": "数学",
+          "location": "1-A 教室",
           "note": ""
         },
         {
           "id": "day_tue_5",
           "time": "12:20",
-          "subject": "??",
-          "location": "??",
+          "subject": "午休",
+          "location": "食堂",
           "note": ""
         },
         {
           "id": "day_tue_6",
           "time": "13:20",
-          "subject": "??",
-          "location": "???",
-          "note": "??"
+          "subject": "美术",
+          "location": "美术室",
+          "note": "素描"
         },
         {
           "id": "day_tue_7",
           "time": "14:30",
-          "subject": "????",
-          "location": "????",
+          "subject": "社团时间",
+          "location": "各活动室",
           "note": ""
         }
-      ]
+      ],
+      "events": []
     },
     {
       "id": "day_wed",
-      "label": "??",
-      "dateLabel": "?????",
+      "label": "周三",
+      "dateLabel": "开学第三日",
       "note": "",
       "schedule": [
         {
           "id": "day_wed_1",
           "time": "08:20",
-          "subject": "??",
-          "location": "1-A ??",
+          "subject": "朝会",
+          "location": "1-A 教室",
           "note": ""
         },
         {
           "id": "day_wed_2",
           "time": "09:00",
-          "subject": "??",
-          "location": "1-A ??",
-          "note": "????"
+          "subject": "英语",
+          "location": "1-A 教室",
+          "note": "单词测试"
         },
         {
           "id": "day_wed_3",
           "time": "10:10",
-          "subject": "??",
-          "location": "????",
-          "note": "????"
+          "subject": "物理",
+          "location": "理科教室",
+          "note": "力学导入"
         },
         {
           "id": "day_wed_4",
           "time": "11:20",
-          "subject": "???",
-          "location": "1-A ??",
+          "subject": "现代文",
+          "location": "1-A 教室",
           "note": ""
         },
         {
           "id": "day_wed_5",
           "time": "12:20",
-          "subject": "??",
-          "location": "??",
+          "subject": "午休",
+          "location": "中庭",
           "note": ""
         },
         {
           "id": "day_wed_6",
           "time": "13:20",
-          "subject": "??",
-          "location": "???",
-          "note": "????"
+          "subject": "音乐",
+          "location": "音乐室",
+          "note": "合唱练习"
         },
         {
           "id": "day_wed_7",
           "time": "14:30",
-          "subject": "??",
-          "location": "???",
+          "subject": "自习",
+          "location": "图书室",
           "note": ""
         }
-      ]
+      ],
+      "events": []
     },
     {
       "id": "day_thu",
-      "label": "??",
-      "dateLabel": "?????",
+      "label": "周四",
+      "dateLabel": "开学第四日",
       "note": "",
       "schedule": [
         {
           "id": "day_thu_1",
           "time": "08:20",
-          "subject": "??",
-          "location": "1-A ??",
+          "subject": "朝会",
+          "location": "1-A 教室",
           "note": ""
         },
         {
           "id": "day_thu_2",
           "time": "09:00",
-          "subject": "??",
-          "location": "1-A ??",
-          "note": "??"
+          "subject": "数学",
+          "location": "1-A 教室",
+          "note": "函数"
         },
         {
           "id": "day_thu_3",
           "time": "10:10",
-          "subject": "??",
-          "location": "1-A ??",
+          "subject": "古典",
+          "location": "1-A 教室",
           "note": ""
         },
         {
           "id": "day_thu_4",
           "time": "11:20",
-          "subject": "??",
-          "location": "????",
-          "note": "????"
+          "subject": "生物",
+          "location": "理科教室",
+          "note": "观察记录"
         },
         {
           "id": "day_thu_5",
           "time": "12:20",
-          "subject": "??",
-          "location": "??",
+          "subject": "午休",
+          "location": "食堂",
           "note": ""
         },
         {
           "id": "day_thu_6",
           "time": "13:20",
-          "subject": "???",
-          "location": "?????",
+          "subject": "家庭科",
+          "location": "家庭科教室",
           "note": ""
         },
         {
           "id": "day_thu_7",
           "time": "14:30",
-          "subject": "????",
-          "location": "????",
+          "subject": "社团时间",
+          "location": "各活动室",
           "note": ""
         }
-      ]
+      ],
+      "events": []
     },
     {
       "id": "day_fri",
-      "label": "??",
-      "dateLabel": "?????",
+      "label": "周五",
+      "dateLabel": "开学第五日",
       "note": "",
       "schedule": [
         {
           "id": "day_fri_1",
           "time": "08:20",
-          "subject": "??",
-          "location": "1-A ??",
+          "subject": "朝会",
+          "location": "1-A 教室",
           "note": ""
         },
         {
           "id": "day_fri_2",
           "time": "09:00",
-          "subject": "???",
-          "location": "1-A ??",
-          "note": "??"
+          "subject": "现代文",
+          "location": "1-A 教室",
+          "note": "作文"
         },
         {
           "id": "day_fri_3",
           "time": "10:10",
-          "subject": "??",
-          "location": "1-A ??",
+          "subject": "英语",
+          "location": "1-A 教室",
           "note": ""
         },
         {
           "id": "day_fri_4",
           "time": "11:20",
-          "subject": "??",
-          "location": "1-A ??",
-          "note": "????"
+          "subject": "地理",
+          "location": "1-A 教室",
+          "note": "地图演习"
         },
         {
           "id": "day_fri_5",
           "time": "12:20",
-          "subject": "??",
-          "location": "?? / ??",
+          "subject": "午休",
+          "location": "中庭 / 食堂",
           "note": ""
         },
         {
           "id": "day_fri_6",
           "time": "13:20",
-          "subject": "??",
-          "location": "??",
-          "note": "??????"
+          "subject": "体育",
+          "location": "操场",
+          "note": "雨天改体育馆"
         },
         {
           "id": "day_fri_7",
           "time": "14:30",
-          "subject": "????",
-          "location": "1-A ??",
-          "note": "????"
+          "subject": "周末班会",
+          "location": "1-A 教室",
+          "note": "值日确认"
         }
-      ]
+      ],
+      "events": []
     },
     {
       "id": "day_sat",
-      "label": "??",
-      "dateLabel": "??",
+      "label": "周六",
+      "dateLabel": "周末",
       "note": "",
       "schedule": [
         {
           "id": "day_sat_1",
           "time": "10:00",
-          "subject": "?? / ??",
-          "location": "??",
-          "note": "?????"
+          "subject": "补习 / 社团",
+          "location": "校内",
+          "note": "参加者确认"
         },
         {
           "id": "day_sat_2",
           "time": "13:00",
-          "subject": "????",
-          "location": "??",
+          "subject": "自由活动",
+          "location": "校内",
           "note": ""
         }
-      ]
+      ],
+      "events": []
     },
     {
       "id": "day_sun",
-      "label": "??",
-      "dateLabel": "???",
+      "label": "周日",
+      "dateLabel": "休校日",
       "note": "",
       "schedule": [
         {
           "id": "day_sun_1",
-          "time": "??",
-          "subject": "??",
-          "location": "??",
-          "note": "?????"
+          "time": "全天",
+          "subject": "休校",
+          "location": "校外",
+          "note": "无正式课程"
         }
-      ]
+      ],
+      "events": []
     }
   ]
 }

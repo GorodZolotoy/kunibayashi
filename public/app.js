@@ -275,12 +275,12 @@ function renderBulletins() {
       <section class="bulletin-board">
         <div class="board-heading">
           <div>
-            <div class="section-title">School Bulletin</div>
-            <div class="meta">Official notes, rumors, and triggered calendar events.</div>
+            <div class="section-title">学校公告栏</div>
+            <div class="meta">学校通知、传闻、社团消息和已触发的校历事件。</div>
           </div>
         </div>
         <div class="bulletin-list">
-          ${bulletins.map(renderBulletinCard).join("") || `<div class="panel empty-panel">No bulletins yet.</div>`}
+          ${bulletins.map(renderBulletinCard).join("") || `<div class="panel empty-panel">公告栏还没有内容。</div>`}
         </div>
       </section>
     </div>
@@ -292,18 +292,18 @@ function renderBulletinCard(bulletin) {
   const day = getCalendarDay(bulletin.dayId);
   const adminTools = stateBag.gmUnlocked ? `
     <div class="admin-row">
-      <button class="danger-button" type="button" data-action="delete-bulletin" data-bulletin-id="${bulletin.id}">Delete</button>
+      <button class="danger-button" type="button" data-action="delete-bulletin" data-bulletin-id="${bulletin.id}">删除</button>
     </div>
   ` : "";
   return `
     <article class="bulletin-card ${bulletin.type}">
       <div class="bulletin-type">${escapeHtml(typeLabelForBulletin(bulletin.type))}</div>
-      <h2>${escapeHtml(bulletin.title || "Untitled")}</h2>
+      <h2>${escapeHtml(bulletin.title || "未命名公告")}</h2>
       <div class="meta">
         ${escapeHtml(bulletin.gameTime || stateBag.data.settings.gameTime || "")}
         ${day ? ` · ${escapeHtml(day.label)} ${escapeHtml(day.dateLabel || "")}` : ""}
         ${author ? ` · ${escapeHtml(author.name)}` : ""}
-        ${bulletin.isPublic === false ? " · GM only" : ""}
+        ${bulletin.isPublic === false ? " · 仅 GM 可见" : ""}
       </div>
       ${bulletin.content ? `<div class="bulletin-content">${formatText(bulletin.content)}</div>` : ""}
       ${adminTools}
@@ -335,7 +335,7 @@ function renderPost(post) {
         <button class="profile-link author-line" type="button" data-action="view-profile" data-character-id="${author?.id || ""}" ${author ? "" : "disabled"}>
           ${renderAvatar(author)}
           <div class="name-block">
-            <div class="name">${escapeHtml(author?.name || "Unknown")}</div>
+            <div class="name">${escapeHtml(author?.name || "未知")}</div>
             <div class="handle">${escapeHtml(author?.handle || "")} · ${escapeHtml(post.gameTime)}</div>
           </div>
         </button>
@@ -370,7 +370,7 @@ function renderReply(reply) {
       <div>
         <div class="meta">
           <button class="inline-profile-link" type="button" data-action="view-profile" data-character-id="${author?.id || ""}" ${author ? "" : "disabled"}>
-            <strong>${escapeHtml(author?.name || "Unknown")}</strong>
+            <strong>${escapeHtml(author?.name || "未知")}</strong>
           </button>
           · ${escapeHtml(reply.gameTime)}
         </div>
@@ -468,13 +468,13 @@ function renderMessage(message) {
       <div class="message-bubble ${hasImage ? "has-attachment" : ""} ${hasImage && !hasText ? "image-only" : ""}">
         <div class="meta">
           <button class="inline-profile-link" type="button" data-action="view-profile" data-character-id="${author?.id || ""}" ${author ? "" : "disabled"}>
-            <strong>${escapeHtml(author?.name || "Unknown")}</strong>
+            <strong>${escapeHtml(author?.name || "未知")}</strong>
           </button>
           · ${escapeHtml(message.gameTime)}
         </div>
         ${hasText ? `<div class="message-text">${formatText(message.content)}</div>` : ""}
         ${message.attachment?.type === "image" ? renderImageAttachment(message.attachment) : ""}
-        ${stateBag.gmUnlocked ? `<button class="danger-button message-delete" type="button" data-action="delete-message" data-message-id="${message.id}">Delete</button>` : ""}
+        ${stateBag.gmUnlocked ? `<button class="danger-button message-delete" type="button" data-action="delete-message" data-message-id="${message.id}">删除</button>` : ""}
       </div>
     </div>
   `;
@@ -516,10 +516,10 @@ function renderCalendarEvents(day) {
   if (!events.length) return "";
   return `
     <div class="event-list">
-      <div class="mini-title">Day Events</div>
+      <div class="mini-title">当日事件</div>
       ${events.map((event) => `
         <div class="event-card ${event.triggeredAt ? "triggered" : ""}">
-          <div class="event-type">${escapeHtml(typeLabelForEvent(event.type))}${event.triggeredAt ? " · triggered" : ""}</div>
+          <div class="event-type">${escapeHtml(typeLabelForEvent(event.type))}${event.triggeredAt ? " · 已触发" : ""}</div>
           <div class="event-title">${escapeHtml(event.title)}</div>
           ${event.detail ? `<div class="meta">${escapeHtml(event.detail)}</div>` : ""}
         </div>
@@ -662,8 +662,8 @@ function renderFollowRequest(relationship) {
       <div class="follow-people">
         ${renderAvatar(requester)}
         <div class="name-block">
-          <div class="name">${escapeHtml(requester?.name || "Unknown")} → ${escapeHtml(target?.name || "Unknown")}</div>
-          <div class="handle">${escapeHtml(requester?.handle || "")} wants to follow ${escapeHtml(target?.handle || "")}</div>
+          <div class="name">${escapeHtml(requester?.name || "未知")} → ${escapeHtml(target?.name || "未知")}</div>
+          <div class="handle">${escapeHtml(requester?.handle || "")} 请求关注 ${escapeHtml(target?.handle || "")}</div>
         </div>
       </div>
       <div class="form-row tight">
@@ -686,21 +686,21 @@ function renderGmInbox() {
 
   return `
     <section class="gm-wide">
-      <div class="section-title">GM Unified Inbox</div>
+      <div class="section-title">GM 统一收件箱</div>
       <div class="inbox-grid">
         <div class="inbox-column">
-          <div class="mini-title">Follow Requests</div>
+          <div class="mini-title">关注请求</div>
           ${pendingFollows.map(renderFollowRequest).join("") || `<div class="hint padded">No pending follows.</div>`}
         </div>
         <div class="inbox-column">
-          <div class="mini-title">Recent Messages</div>
+          <div class="mini-title">最新聊天</div>
           ${recentMessages.map((message) => {
             const author = getActor(message.authorId);
             const chat = getChat(message.chatId);
             return `
               <div class="inbox-item">
                 <div>
-                  <div class="name">${escapeHtml(author?.name || "Unknown")} → ${escapeHtml(chat?.name || "Unknown chat")}</div>
+                  <div class="name">${escapeHtml(author?.name || "未知")} → ${escapeHtml(chat?.name || "未知聊天")}</div>
                   <div class="meta">${escapeHtml(message.gameTime || "")} · ${escapeHtml(message.content || (message.attachment ? "[image]" : ""))}</div>
                 </div>
                 <button class="secondary-button compact-action" type="button" data-action="open-gm-chat" data-chat-id="${message.chatId}">Open</button>
@@ -709,13 +709,13 @@ function renderGmInbox() {
           }).join("") || `<div class="hint padded">No messages yet.</div>`}
         </div>
         <div class="inbox-column">
-          <div class="mini-title">Timeline Replies</div>
+          <div class="mini-title">时间线回复</div>
           ${recentReplies.map((reply) => {
             const author = getActor(reply.authorId);
             return `
               <div class="inbox-item">
                 <div>
-                  <div class="name">${escapeHtml(author?.name || "Unknown")}</div>
+                  <div class="name">${escapeHtml(author?.name || "未知")}</div>
                   <div class="meta">${escapeHtml(reply.gameTime || "")} · ${escapeHtml(reply.content || "")}</div>
                 </div>
                 <button class="secondary-button compact-action" type="button" data-action="open-gm-feed">Open</button>
@@ -734,52 +734,52 @@ function renderBulletinComposer(chars, days) {
     .slice(0, 5);
   return `
     <section>
-      <div class="section-title">Rumor / Bulletin Board</div>
+      <div class="section-title">公告 / 传闻板</div>
       <div class="form-grid">
         <div class="two-col">
-          <label>Type
+          <label>类型
             <select id="bulletin-type">
-              <option value="bulletin">Bulletin</option>
-              <option value="rumor">Rumor</option>
-              <option value="school">School Notice</option>
-              <option value="club">Club Notice</option>
-              <option value="incident">Incident</option>
+              <option value="bulletin">公告</option>
+              <option value="rumor">传闻</option>
+              <option value="school">学校通知</option>
+              <option value="club">社团通知</option>
+              <option value="incident">事件通报</option>
             </select>
           </label>
-          <label>Author
+          <label>发布者
             <select id="bulletin-author">
-              <option value="">No visible author</option>
+              <option value="">不显示发布者</option>
               ${chars.map((character) => `<option value="${character.id}">${escapeHtml(character.name)}</option>`).join("")}
             </select>
           </label>
         </div>
         <div class="two-col">
-          <label>Day
+          <label>关联日期
             <select id="bulletin-day">
-              <option value="">No day link</option>
+              <option value="">不关联日期</option>
               ${days.map((day) => `<option value="${day.id}">${escapeHtml(day.label)} ${escapeHtml(day.dateLabel || "")}</option>`).join("")}
             </select>
           </label>
-          <label>Visibility
+          <label>可见性
             <select id="bulletin-public">
-              <option value="true">Player visible</option>
-              <option value="false">GM only</option>
+              <option value="true">玩家可见</option>
+              <option value="false">仅 GM 可见</option>
             </select>
           </label>
         </div>
-        <input id="bulletin-title" maxlength="100" placeholder="Title">
-        <textarea id="bulletin-content" maxlength="1200" placeholder="Rumor, school notice, or bulletin text"></textarea>
-        <button class="primary-button" type="button" data-action="publish-bulletin">Publish bulletin</button>
+        <input id="bulletin-title" maxlength="100" placeholder="标题">
+        <textarea id="bulletin-content" maxlength="1200" placeholder="传闻、学校通知、社团消息或事件通报"></textarea>
+        <button class="primary-button" type="button" data-action="publish-bulletin">发布公告</button>
         <div class="compact-list">
           ${recent.map((bulletin) => `
             <div class="compact-row">
               <div>
                 <div class="name">${escapeHtml(bulletin.title)}</div>
-                <div class="meta">${escapeHtml(typeLabelForBulletin(bulletin.type))} · ${escapeHtml(bulletin.gameTime || "")}${bulletin.isPublic === false ? " · GM only" : ""}</div>
+                <div class="meta">${escapeHtml(typeLabelForBulletin(bulletin.type))} · ${escapeHtml(bulletin.gameTime || "")}${bulletin.isPublic === false ? " · 仅 GM 可见" : ""}</div>
               </div>
-              <button class="danger-button compact-action" type="button" data-action="delete-bulletin" data-bulletin-id="${bulletin.id}">Delete</button>
+              <button class="danger-button compact-action" type="button" data-action="delete-bulletin" data-bulletin-id="${bulletin.id}">删除</button>
             </div>
-          `).join("") || `<div class="hint padded">No bulletins yet.</div>`}
+          `).join("") || `<div class="hint padded">还没有公告。</div>`}
         </div>
       </div>
     </section>
@@ -790,48 +790,48 @@ function renderCalendarEventManager(days, gmDay) {
   const day = gmDay || days[0];
   return `
     <section>
-      <div class="section-title">Calendar Event Triggers</div>
+      <div class="section-title">校历事件触发器</div>
       <div class="form-grid">
-        <label>Edit day
+        <label>编辑日期
           <select id="event-day">
             ${days.map((item) => `<option value="${item.id}" ${item.id === day?.id ? "selected" : ""}>${escapeHtml(item.label)} ${escapeHtml(item.dateLabel || "")}</option>`).join("")}
           </select>
         </label>
         <div class="two-col">
-          <label>Type
+          <label>类型
             <select id="event-type">
-              <option value="event">Event</option>
-              <option value="rumor">Rumor</option>
-              <option value="exam">Exam</option>
-              <option value="club">Club</option>
-              <option value="incident">Incident</option>
-              <option value="notice">Notice</option>
+              <option value="event">事件</option>
+              <option value="rumor">传闻</option>
+              <option value="exam">考试</option>
+              <option value="club">社团</option>
+              <option value="incident">事件通报</option>
+              <option value="notice">通知</option>
             </select>
           </label>
-          <label>Visibility
+          <label>可见性
             <select id="event-public">
-              <option value="false">GM only until triggered</option>
-              <option value="true">Player visible now</option>
+              <option value="false">触发前仅 GM 可见</option>
+              <option value="true">现在就玩家可见</option>
             </select>
           </label>
         </div>
-        <input id="event-title" maxlength="100" placeholder="Event title">
-        <textarea id="event-detail" maxlength="900" placeholder="What happens, what unlocks, or what rumor drops"></textarea>
-        <button class="primary-button" type="button" data-action="create-calendar-event">Add event trigger</button>
+        <input id="event-title" maxlength="100" placeholder="事件标题">
+        <textarea id="event-detail" maxlength="900" placeholder="会发生什么、解锁什么线索、或投放什么传闻"></textarea>
+        <button class="primary-button" type="button" data-action="create-calendar-event">添加事件触发器</button>
         <div class="compact-list">
           ${(day?.events || []).map((event) => `
             <div class="compact-row event-row">
               <div>
                 <div class="name">${escapeHtml(event.title)}</div>
-                <div class="meta">${escapeHtml(typeLabelForEvent(event.type))} · ${event.triggeredAt ? "triggered" : (event.isPublic ? "visible" : "GM only")}</div>
+                <div class="meta">${escapeHtml(typeLabelForEvent(event.type))} · ${event.triggeredAt ? "已触发" : (event.isPublic ? "玩家可见" : "仅 GM 可见")}</div>
                 ${event.detail ? `<div class="meta">${escapeHtml(event.detail)}</div>` : ""}
               </div>
               <div class="row-actions">
-                <button class="secondary-button compact-action" type="button" data-action="trigger-calendar-event" data-day-id="${day.id}" data-event-id="${event.id}" ${event.triggeredAt ? "disabled" : ""}>Trigger</button>
-                <button class="danger-button compact-action" type="button" data-action="delete-calendar-event" data-day-id="${day.id}" data-event-id="${event.id}">Delete</button>
+                <button class="secondary-button compact-action" type="button" data-action="trigger-calendar-event" data-day-id="${day.id}" data-event-id="${event.id}" ${event.triggeredAt ? "disabled" : ""}>触发</button>
+                <button class="danger-button compact-action" type="button" data-action="delete-calendar-event" data-day-id="${day.id}" data-event-id="${event.id}">删除</button>
               </div>
             </div>
-          `).join("") || `<div class="hint padded">No events on this day.</div>`}
+          `).join("") || `<div class="hint padded">这一天还没有事件。</div>`}
         </div>
       </div>
     </section>
@@ -848,7 +848,7 @@ function renderRelationshipGraph(chars) {
 
   return `
     <section class="gm-wide">
-      <div class="section-title">Relationship Graph</div>
+      <div class="section-title">关系图</div>
       <div class="relationship-grid">
         <div class="relationship-nodes">
           ${counts.map(({ character, accepted, pending }) => `
@@ -867,9 +867,9 @@ function renderRelationshipGraph(chars) {
             const target = getActor(relationship.targetId);
             return `
               <div class="relationship-edge ${relationship.status}">
-                <span>${escapeHtml(requester?.name || "Unknown")}</span>
+                <span>${escapeHtml(requester?.name || "未知")}</span>
                 <strong>${escapeHtml(relationship.status)}</strong>
-                <span>${escapeHtml(target?.name || "Unknown")}</span>
+                <span>${escapeHtml(target?.name || "未知")}</span>
               </div>
             `;
           }).join("") || `<div class="hint padded">No follow relationships yet.</div>`}
@@ -884,10 +884,10 @@ function renderGmEditLog() {
   const logs = stateBag.data.auditLog || [];
   return `
     <section class="gm-wide">
-      <div class="section-title">Undo / Delete / Edit Log</div>
+      <div class="section-title">撤销 / 删除 / 编辑记录</div>
       <div class="log-toolbar">
-        <button class="primary-button" type="button" data-action="gm-undo" ${undo ? "" : "disabled"}>Undo last GM action</button>
-        <div class="hint">${undo ? escapeHtml(`Ready to undo: ${undo.label}`) : "No undoable GM action yet."}</div>
+        <button class="primary-button" type="button" data-action="gm-undo" ${undo ? "" : "disabled"}>撤销上一步 GM 操作</button>
+        <div class="hint">${undo ? escapeHtml(`可撤销：${undo.label}`) : "还没有可撤销的 GM 操作。"}</div>
       </div>
       <div class="log-list">
         ${logs.slice(0, 12).map((entry) => `
@@ -1096,7 +1096,7 @@ async function deleteMessage(messageId) {
     method: "DELETE",
     admin: true
   });
-  showNotice("Message deleted. Use GM undo if needed.");
+  showNotice("消息已删除。需要的话可以用 GM 撤销。");
   await refresh(true);
 }
 
@@ -1218,7 +1218,7 @@ async function saveCalendarSchedule() {
 async function publishBulletin() {
   const title = document.getElementById("bulletin-title")?.value.trim();
   const content = document.getElementById("bulletin-content")?.value.trim();
-  if (!title && !content) return showNotice("Bulletin title or content is required.");
+  if (!title && !content) return showNotice("请填写公告标题或内容。");
   stateBag.data = await api("/api/bulletins", {
     method: "POST",
     admin: true,
@@ -1231,7 +1231,7 @@ async function publishBulletin() {
       isPublic: document.getElementById("bulletin-public")?.value !== "false"
     }
   });
-  showNotice("Bulletin published.");
+  showNotice("公告已发布。");
   render();
 }
 
@@ -1241,7 +1241,7 @@ async function deleteBulletin(bulletinId) {
     method: "DELETE",
     admin: true
   });
-  showNotice("Bulletin deleted. Use GM undo if needed.");
+  showNotice("公告已删除。需要的话可以用 GM 撤销。");
   render();
 }
 
@@ -1249,8 +1249,8 @@ async function createCalendarEvent() {
   const dayId = document.getElementById("event-day")?.value;
   const title = document.getElementById("event-title")?.value.trim();
   const detail = document.getElementById("event-detail")?.value.trim();
-  if (!dayId) return showNotice("Choose a calendar day.");
-  if (!title && !detail) return showNotice("Event title or detail is required.");
+  if (!dayId) return showNotice("请选择日期。");
+  if (!title && !detail) return showNotice("请填写事件标题或内容。");
   stateBag.data = await api(`/api/calendar/days/${encodeURIComponent(dayId)}/events`, {
     method: "POST",
     admin: true,
@@ -1264,7 +1264,7 @@ async function createCalendarEvent() {
   });
   stateBag.gmScheduleDayId = dayId;
   localStorage.setItem("kokubayashi.gmScheduleDayId", dayId);
-  showNotice("Calendar event added.");
+  showNotice("校历事件已添加。");
   render();
 }
 
@@ -1276,7 +1276,7 @@ async function triggerCalendarEvent(dayId, eventId) {
   });
   stateBag.selectedCalendarDayId = dayId;
   localStorage.setItem("kokubayashi.calendarDayId", dayId);
-  showNotice("Event triggered and posted to bulletins.");
+  showNotice("事件已触发，并已发布到公告栏。");
   render();
 }
 
@@ -1286,7 +1286,7 @@ async function deleteCalendarEvent(dayId, eventId) {
     method: "DELETE",
     admin: true
   });
-  showNotice("Calendar event deleted. Use GM undo if needed.");
+  showNotice("校历事件已删除。需要的话可以用 GM 撤销。");
   render();
 }
 
@@ -1692,25 +1692,25 @@ function typeLabel(actor) {
 
 function typeLabelForBulletin(type) {
   const labels = {
-    bulletin: "Bulletin",
-    rumor: "Rumor",
-    school: "School",
-    club: "Club",
-    incident: "Incident"
+    bulletin: "公告",
+    rumor: "传闻",
+    school: "学校通知",
+    club: "社团通知",
+    incident: "事件通报"
   };
-  return labels[type] || "Bulletin";
+  return labels[type] || "公告";
 }
 
 function typeLabelForEvent(type) {
   const labels = {
-    event: "Event",
-    rumor: "Rumor",
-    exam: "Exam",
-    club: "Club",
-    incident: "Incident",
-    notice: "Notice"
+    event: "事件",
+    rumor: "传闻",
+    exam: "考试",
+    club: "社团",
+    incident: "事件通报",
+    notice: "通知"
   };
-  return labels[type] || "Event";
+  return labels[type] || "事件";
 }
 
 function formatDateTime(value) {

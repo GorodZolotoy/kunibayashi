@@ -307,15 +307,27 @@ function normalizeCalendarDays(days) {
   const source = Array.isArray(days) && days.length ? days : fallback;
   return source.map((day, index) => {
     const fallbackDay = fallback[index] || fallback[0];
+    const brokenDay = calendarDayLooksCorrupt(day);
+    const sourceDay = brokenDay ? fallbackDay : day;
     return {
       id: String(day.id || fallbackDay.id || id("day")),
-      label: String(day.label || fallbackDay.label || `Day ${index + 1}`).trim(),
-      dateLabel: String(day.dateLabel || day.date || fallbackDay.dateLabel || "").trim(),
-      note: String(day.note || "").trim(),
-      schedule: normalizeSchedule(day.schedule),
+      label: String(sourceDay.label || fallbackDay.label || `Day ${index + 1}`).trim(),
+      dateLabel: String(sourceDay.dateLabel || sourceDay.date || fallbackDay.dateLabel || "").trim(),
+      note: String(brokenDay ? "" : (day.note || "")).trim(),
+      schedule: normalizeSchedule(sourceDay.schedule),
       events: normalizeCalendarEvents(day.events).map((event) => ({ ...event, dayId: String(day.id || fallbackDay.id || "") }))
     };
   });
+}
+
+function calendarDayLooksCorrupt(day) {
+  const fields = [
+    day?.label,
+    day?.dateLabel,
+    ...(Array.isArray(day?.schedule) ? day.schedule.flatMap((item) => [item.time, item.subject, item.location, item.note]) : [])
+  ].filter((value) => value !== undefined && value !== null).map(String);
+  if (String(day?.label || "").includes("??") || String(day?.dateLabel || "").includes("??")) return true;
+  return fields.filter((value) => value.includes("??")).length >= 3;
 }
 
 function normalizeSchedule(schedule) {
@@ -355,7 +367,7 @@ function normalizeCalendarEvents(events) {
     id: event.id || id("event"),
     dayId: String(event.dayId || "").trim(),
     type: normalizeEventType(event.type),
-    title: String(event.title || `Event ${index + 1}`).trim(),
+    title: String(event.title || `事件 ${index + 1}`).trim(),
     detail: String(event.detail || event.content || "").trim(),
     triggerTarget: ["bulletin", "none"].includes(event.triggerTarget) ? event.triggerTarget : "bulletin",
     isPublic: event.isPublic === true,
@@ -376,7 +388,7 @@ function normalizeBulletins(bulletins) {
   return bulletins.map((bulletin, index) => ({
     id: bulletin.id || id("bulletin"),
     type: normalizeBulletinType(bulletin.type),
-    title: String(bulletin.title || `Bulletin ${index + 1}`).trim(),
+    title: String(bulletin.title || `公告 ${index + 1}`).trim(),
     content: String(bulletin.content || "").trim(),
     authorId: String(bulletin.authorId || "").trim(),
     dayId: String(bulletin.dayId || "").trim(),
@@ -399,7 +411,7 @@ function normalizeAuditLog(entries) {
   return entries.map((entry) => ({
     id: entry.id || id("log"),
     action: String(entry.action || "update").trim(),
-    label: String(entry.label || "GM update").trim(),
+    label: String(entry.label || "GM 更新").trim(),
     details: entry.details && typeof entry.details === "object" ? entry.details : {},
     createdAt: entry.createdAt || new Date().toISOString()
   })).slice(0, 80);
@@ -410,7 +422,7 @@ function normalizeUndoStack(entries) {
   return entries.map((entry) => ({
     id: entry.id || id("undo"),
     action: String(entry.action || "update").trim(),
-    label: String(entry.label || "GM update").trim(),
+    label: String(entry.label || "GM 更新").trim(),
     keys: Array.isArray(entry.keys) ? entry.keys.map(String) : [],
     snapshot: entry.snapshot && typeof entry.snapshot === "object" ? entry.snapshot : {},
     createdAt: entry.createdAt || new Date().toISOString()
@@ -772,7 +784,7 @@ function restoreLastUndo(state) {
     state[key] = JSON.parse(JSON.stringify(entry.snapshot[key]));
   }
   normalizeState(state);
-  pushAudit(state, "undo", `Undid ${entry.label}`, { undoId: entry.id, action: entry.action });
+  pushAudit(state, "undo", `已撤销：${entry.label}`, { undoId: entry.id, action: entry.action });
   return entry;
 }
 
@@ -811,10 +823,10 @@ async function routeApi(req, res, url) {
     if (!requireAdmin(req, res)) return;
     const title = String(body.title || "").trim();
     const content = String(body.content || "").trim();
-    if (!title && !content) return sendJson(res, 400, { error: "Bulletin title or content is required." });
+    if (!title && !content) return sendJson(res, 400, { error: "请填写公告标题或内容。" });
     const author = body.authorId ? findCharacter(state, body.authorId) : null;
     const now = new Date().toISOString();
-    pushUndo(state, "create_bulletin", title || "Create bulletin", ["bulletins"], { type: body.type || "bulletin" });
+    pushUndo(state, "create_bulletin", title || "创建公告", ["bulletins"], { type: body.type || "bulletin" });
     state.bulletins.unshift({
       id: id("bulletin"),
       type: normalizeBulletinType(body.type),
@@ -838,10 +850,10 @@ async function routeApi(req, res, url) {
     if (!requireAdmin(req, res)) return;
     const bulletinId = decodeURIComponent(bulletinMatch[1]);
     const bulletin = state.bulletins.find((item) => item.id === bulletinId);
-    if (!bulletin) return sendJson(res, 404, { error: "Bulletin not found." });
+    if (!bulletin) return sendJson(res, 404, { error: "公告不存在。" });
 
     if (req.method === "PATCH") {
-      pushUndo(state, "edit_bulletin", `Edit bulletin: ${bulletin.title}`, ["bulletins"], { bulletinId });
+      pushUndo(state, "edit_bulletin", `编辑公告：${bulletin.title}`, ["bulletins"], { bulletinId });
       if (body.type !== undefined) bulletin.type = normalizeBulletinType(body.type);
       if (body.title !== undefined) bulletin.title = String(body.title || bulletin.title).trim();
       if (body.content !== undefined) bulletin.content = String(body.content || "").trim();
@@ -856,7 +868,7 @@ async function routeApi(req, res, url) {
     }
 
     if (req.method === "DELETE") {
-      pushUndo(state, "delete_bulletin", `Delete bulletin: ${bulletin.title}`, ["bulletins"], { bulletinId });
+      pushUndo(state, "delete_bulletin", `删除公告：${bulletin.title}`, ["bulletins"], { bulletinId });
       state.bulletins = state.bulletins.filter((item) => item.id !== bulletinId);
       writeState(state);
       sendJson(res, 200, publicState(state));
@@ -998,7 +1010,7 @@ async function routeApi(req, res, url) {
 
   if (req.method === "PATCH" && url.pathname === "/api/settings") {
     if (!requireAdmin(req, res)) return;
-    pushUndo(state, "edit_settings", "Edit time and site settings", ["settings"]);
+    pushUndo(state, "edit_settings", "编辑时间和站点设置", ["settings"]);
     state.settings.gameTime = String(body.gameTime || state.settings.gameTime).trim();
     state.settings.schoolDay = String(body.schoolDay || state.settings.schoolDay).trim();
     state.settings.feedName = String(body.feedName || state.settings.feedName).trim();
@@ -1012,7 +1024,7 @@ async function routeApi(req, res, url) {
     if (!requireAdmin(req, res)) return;
     const day = state.calendarDays.find((item) => item.id === body.dayId);
     if (!day) return sendJson(res, 404, { error: "Calendar day not found." });
-    pushUndo(state, "set_current_day", `Set current day: ${day.label}`, ["settings", "calendarDays"], { dayId: day.id });
+    pushUndo(state, "set_current_day", `设置当前日：${day.label}`, ["settings", "calendarDays"], { dayId: day.id });
     state.settings.currentDayId = day.id;
     state.settings.schoolDay = day.label;
     writeState(state);
@@ -1033,9 +1045,9 @@ async function routeApi(req, res, url) {
     if (req.method === "POST" && !eventId) {
       const title = String(body.title || "").trim();
       const detail = String(body.detail || body.content || "").trim();
-      if (!title && !detail) return sendJson(res, 400, { error: "Event title or detail is required." });
+      if (!title && !detail) return sendJson(res, 400, { error: "请填写事件标题或内容。" });
       const now = new Date().toISOString();
-      pushUndo(state, "create_calendar_event", `Create event: ${title || detail.slice(0, 32)}`, ["calendarDays"], { dayId });
+      pushUndo(state, "create_calendar_event", `创建事件：${title || detail.slice(0, 32)}`, ["calendarDays"], { dayId });
       day.events.push({
         id: id("event"),
         dayId: day.id,
@@ -1057,7 +1069,7 @@ async function routeApi(req, res, url) {
     if (!event) return sendJson(res, 404, { error: "Calendar event not found." });
 
     if (req.method === "PATCH" && !action) {
-      pushUndo(state, "edit_calendar_event", `Edit event: ${event.title}`, ["calendarDays"], { dayId, eventId });
+      pushUndo(state, "edit_calendar_event", `编辑事件：${event.title}`, ["calendarDays"], { dayId, eventId });
       if (body.type !== undefined) event.type = normalizeEventType(body.type);
       if (body.title !== undefined) event.title = String(body.title || event.title).trim();
       if (body.detail !== undefined) event.detail = String(body.detail || "").trim();
@@ -1070,7 +1082,7 @@ async function routeApi(req, res, url) {
     }
 
     if (req.method === "POST" && action === "trigger") {
-      pushUndo(state, "trigger_calendar_event", `Trigger event: ${event.title}`, ["calendarDays", "bulletins"], { dayId, eventId });
+      pushUndo(state, "trigger_calendar_event", `触发事件：${event.title}`, ["calendarDays", "bulletins"], { dayId, eventId });
       const now = new Date().toISOString();
       event.triggeredAt = now;
       event.isPublic = true;
@@ -1096,7 +1108,7 @@ async function routeApi(req, res, url) {
     }
 
     if (req.method === "DELETE" && !action) {
-      pushUndo(state, "delete_calendar_event", `Delete event: ${event.title}`, ["calendarDays"], { dayId, eventId });
+      pushUndo(state, "delete_calendar_event", `删除事件：${event.title}`, ["calendarDays"], { dayId, eventId });
       day.events = day.events.filter((item) => item.id !== eventId);
       writeState(state);
       sendJson(res, 200, publicState(state));
@@ -1109,7 +1121,7 @@ async function routeApi(req, res, url) {
     const dayId = decodeURIComponent(url.pathname.split("/").pop());
     const day = state.calendarDays.find((item) => item.id === dayId);
     if (!day) return sendJson(res, 404, { error: "Calendar day not found." });
-    pushUndo(state, "edit_calendar_day", `Edit schedule: ${day.label}`, ["settings", "calendarDays"], { dayId });
+    pushUndo(state, "edit_calendar_day", `编辑课程表：${day.label}`, ["settings", "calendarDays"], { dayId });
     if (body.label !== undefined) day.label = String(body.label || day.label).trim();
     if (body.dateLabel !== undefined) day.dateLabel = String(body.dateLabel || "").trim();
     if (body.note !== undefined) day.note = String(body.note || "").trim();
@@ -1125,7 +1137,7 @@ async function routeApi(req, res, url) {
     if (!requireAdmin(req, res)) return;
     const name = String(body.name || "").trim();
     if (!name) return sendJson(res, 400, { error: "Character name is required." });
-    pushUndo(state, "create_character", `Create character: ${name}`, ["characters"]);
+    pushUndo(state, "create_character", `创建角色：${name}`, ["characters"]);
     const character = makeCharacter(id("char"), name, body.handle || makeHandle(name), body.type === "player" ? "player" : "npc");
     if (body.avatarData) {
       try {
@@ -1146,7 +1158,7 @@ async function routeApi(req, res, url) {
     const characterId = decodeURIComponent(url.pathname.split("/").pop());
     const character = state.characters.find((item) => item.id === characterId);
     if (!character) return sendJson(res, 404, { error: "Character not found." });
-    pushUndo(state, "edit_character", `Edit character: ${character.name}`, ["characters"], { characterId });
+    pushUndo(state, "edit_character", `编辑角色：${character.name}`, ["characters"], { characterId });
     if (body.name !== undefined) character.name = String(body.name).trim() || character.name;
     if (body.handle !== undefined) character.handle = `@${String(body.handle).replace(/^@/, "").trim()}`;
     if (body.color !== undefined) character.color = String(body.color).trim() || character.color;
@@ -1222,7 +1234,7 @@ async function routeApi(req, res, url) {
 
     let chat = directChatFor(state, requester.id, target.id);
     if (!chat) {
-      if (isAdmin(req)) pushUndo(state, "create_direct_chat", `Create direct chat: ${requester.name} / ${target.name}`, ["chats"], { requesterId: requester.id, targetId: target.id });
+      if (isAdmin(req)) pushUndo(state, "create_direct_chat", `创建私聊：${requester.name} / ${target.name}`, ["chats"], { requesterId: requester.id, targetId: target.id });
       chat = {
         id: id("chat"),
         name: `${requester.name} / ${target.name}`,
@@ -1268,7 +1280,7 @@ async function routeApi(req, res, url) {
       createdBy: creator.id,
       createdAt: new Date().toISOString()
     };
-    if (isAdmin(req)) pushUndo(state, "create_private_chat", `Create private chat: ${name}`, ["chats"], { creatorId: creator.id, memberCount: memberIds.length });
+    if (isAdmin(req)) pushUndo(state, "create_private_chat", `创建私密群聊：${name}`, ["chats"], { creatorId: creator.id, memberCount: memberIds.length });
     state.chats.push(chat);
     writeState(state);
     sendJson(res, 201, { state: publicState(state), chatId: chat.id });
@@ -1294,7 +1306,7 @@ async function routeApi(req, res, url) {
     }
 
     if (!content && !attachment) return sendJson(res, 400, { error: "Post content or image is required." });
-    if (isAdmin(req)) pushUndo(state, "create_post", `Create post as ${author.name}`, ["posts"], { authorId: author.id });
+    if (isAdmin(req)) pushUndo(state, "create_post", `以 ${author.name} 发布帖子`, ["posts"], { authorId: author.id });
     state.posts.push({
       id: id("post"),
       authorId: author.id,
@@ -1344,7 +1356,7 @@ async function routeApi(req, res, url) {
 
     if (req.method === "PATCH" && !action) {
       if (!requireAdmin(req, res)) return;
-      pushUndo(state, "edit_post", "Edit post metrics/time", ["posts"], { postId });
+      pushUndo(state, "edit_post", "编辑帖子数据 / 时间", ["posts"], { postId });
       if (body.authorId && findCharacter(state, body.authorId)) post.authorId = body.authorId;
       if (body.content !== undefined) post.content = String(body.content).trim();
       if (body.gameTime !== undefined) post.gameTime = String(body.gameTime).trim();
@@ -1356,7 +1368,7 @@ async function routeApi(req, res, url) {
 
     if (req.method === "DELETE" && !action) {
       if (!requireAdmin(req, res)) return;
-      pushUndo(state, "delete_post", "Delete post", ["posts"], { postId });
+      pushUndo(state, "delete_post", "删除帖子", ["posts"], { postId });
       state.posts = state.posts.filter((item) => item.id !== postId);
       writeState(state);
       sendJson(res, 200, publicState(state));
@@ -1369,7 +1381,7 @@ async function routeApi(req, res, url) {
     const name = String(body.name || "").trim();
     if (!name) return sendJson(res, 400, { error: "Chat name is required." });
     const memberIds = unique(Array.isArray(body.memberIds) ? body.memberIds : []);
-    pushUndo(state, "create_chat", `Create chat: ${name}`, ["chats"], { memberCount: memberIds.length });
+    pushUndo(state, "create_chat", `创建群聊：${name}`, ["chats"], { memberCount: memberIds.length });
     state.chats.push({
       id: id("chat"),
       name,
@@ -1389,7 +1401,7 @@ async function routeApi(req, res, url) {
     const chatId = decodeURIComponent(url.pathname.split("/").pop());
     const chat = state.chats.find((item) => item.id === chatId);
     if (!chat) return sendJson(res, 404, { error: "Chat not found." });
-    pushUndo(state, "edit_chat", `Edit chat: ${chat.name}`, ["chats"], { chatId });
+    pushUndo(state, "edit_chat", `编辑群聊：${chat.name}`, ["chats"], { chatId });
     if (body.name !== undefined) chat.name = String(body.name).trim() || chat.name;
     if (body.memberIds !== undefined) chat.memberIds = unique(Array.isArray(body.memberIds) ? body.memberIds : []);
     if (body.isPublic !== undefined) chat.isPublic = Boolean(body.isPublic);
@@ -1420,7 +1432,7 @@ async function routeApi(req, res, url) {
       }
     }
 
-    if (!content && !attachment) return sendJson(res, 400, { error: "Message content or image is required." });
+    if (!content && !attachment) return sendJson(res, 400, { error: "消息内容或图片不能为空。" });
     if (isAdmin(req)) pushUndo(state, "send_message", `Send message as ${author.name}`, ["messages"], { chatId: chat.id, authorId: author.id });
     state.messages.push({
       id: id("msg"),
@@ -1440,8 +1452,8 @@ async function routeApi(req, res, url) {
     if (!requireAdmin(req, res)) return;
     const messageId = decodeURIComponent(url.pathname.split("/").pop());
     const message = state.messages.find((item) => item.id === messageId);
-    if (!message) return sendJson(res, 404, { error: "Message not found." });
-    pushUndo(state, "delete_message", "Delete message", ["messages"], { messageId, chatId: message.chatId });
+    if (!message) return sendJson(res, 404, { error: "消息不存在。" });
+    pushUndo(state, "delete_message", "删除消息", ["messages"], { messageId, chatId: message.chatId });
     state.messages = state.messages.filter((item) => item.id !== messageId);
     writeState(state);
     sendJson(res, 200, publicState(state));
@@ -1495,9 +1507,9 @@ function exportMarkdown(state) {
     }
     if (day.events?.length) {
       lines.push("");
-      lines.push("Events:");
+      lines.push("事件：");
       for (const event of day.events) {
-        const status = event.triggeredAt ? "triggered" : (event.isPublic ? "public" : "GM only");
+        const status = event.triggeredAt ? "已触发" : (event.isPublic ? "玩家可见" : "仅 GM 可见");
         lines.push(`- [${event.type}] ${event.title} (${status})`);
         if (event.detail) lines.push(`  ${event.detail}`);
       }
@@ -1505,12 +1517,12 @@ function exportMarkdown(state) {
     lines.push("");
   }
 
-  lines.push("## Bulletin / Rumor Board", "");
+  lines.push("## 公告 / 传闻板", "");
   for (const bulletin of [...(state.bulletins || [])].sort((a, b) => String(a.createdAt).localeCompare(String(b.createdAt)))) {
     const author = byId.get(bulletin.authorId);
     lines.push(`### ${bulletin.gameTime || ""} | ${bulletin.title}`.trim());
     lines.push("");
-    lines.push(`Type: ${bulletin.type}${author ? ` / ${author.name}` : ""}${bulletin.isPublic ? "" : " / GM only"}`);
+    lines.push(`类型：${bulletin.type}${author ? ` / ${author.name}` : ""}${bulletin.isPublic ? "" : " / 仅 GM 可见"}`);
     if (bulletin.content) {
       lines.push("");
       lines.push(bulletin.content);
