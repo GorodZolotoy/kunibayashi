@@ -3,6 +3,8 @@ const stateBag = {
   tab: localStorage.getItem("kokubayashi.tab") || "feed",
   actorId: localStorage.getItem("kokubayashi.actorId") || "",
   activeChatId: localStorage.getItem("kokubayashi.chatId") || "",
+  profileId: "",
+  privateChatOpen: false,
   gmPin: localStorage.getItem("kokubayashi.gmPin") || "",
   accountTokens: readAccountTokens(),
   gmUnlocked: localStorage.getItem("kokubayashi.gmUnlocked") === "true"
@@ -92,10 +94,13 @@ async function handleAction(target) {
   if (action === "update-avatar") return updateAvatar();
   if (action === "upload-emoji") return uploadEmoji();
   if (action === "insert-emoji") return insertEmoji(target.dataset.target, target.dataset.value);
-  if (action === "request-follow") return requestFollow();
+  if (action === "view-profile") return viewProfile(target.dataset.characterId);
+  if (action === "close-profile") return closeProfile();
+  if (action === "request-follow") return requestFollow(target.dataset.characterId);
   if (action === "approve-follow") return updateFollow(target.dataset.followId, "accepted");
   if (action === "reject-follow") return updateFollow(target.dataset.followId, "rejected");
-  if (action === "open-direct-chat") return openDirectChat();
+  if (action === "open-direct-chat") return openDirectChat(target.dataset.characterId);
+  if (action === "toggle-private-chat-form") return togglePrivateChatForm();
   if (action === "create-player-chat") return createPlayerPrivateChat();
 }
 
@@ -146,6 +151,7 @@ function render() {
   if (stateBag.tab === "feed") renderFeed();
   if (stateBag.tab === "chats") renderChats();
   if (stateBag.tab === "gm") renderGm();
+  renderProfileOverlay();
 }
 
 function canAutoRender() {
@@ -247,13 +253,13 @@ function renderPost(post) {
   return `
     <article class="post">
       <header class="post-header">
-        <div class="author-line">
+        <button class="profile-link author-line" type="button" data-action="view-profile" data-character-id="${author?.id || ""}" ${author ? "" : "disabled"}>
           ${renderAvatar(author)}
           <div class="name-block">
             <div class="name">${escapeHtml(author?.name || "Unknown")}</div>
             <div class="handle">${escapeHtml(author?.handle || "")} · ${escapeHtml(post.gameTime)}</div>
           </div>
-        </div>
+        </button>
       </header>
       <div class="post-content">${formatText(post.content)}</div>
       ${post.attachment?.type === "image" ? renderImageAttachment(post.attachment, "post-image") : ""}
@@ -279,9 +285,16 @@ function renderReply(reply) {
   const author = getActor(reply.authorId);
   return `
     <div class="reply">
-      ${renderAvatar(author)}
+      <button class="profile-avatar-button" type="button" data-action="view-profile" data-character-id="${author?.id || ""}" ${author ? "" : "disabled"}>
+        ${renderAvatar(author)}
+      </button>
       <div>
-        <div class="meta"><strong>${escapeHtml(author?.name || "Unknown")}</strong> · ${escapeHtml(reply.gameTime)}</div>
+        <div class="meta">
+          <button class="inline-profile-link" type="button" data-action="view-profile" data-character-id="${author?.id || ""}" ${author ? "" : "disabled"}>
+            <strong>${escapeHtml(author?.name || "Unknown")}</strong>
+          </button>
+          · ${escapeHtml(reply.gameTime)}
+        </div>
         <div class="reply-content">${formatText(reply.content)}</div>
       </div>
     </div>
@@ -291,20 +304,8 @@ function renderReply(reply) {
 function renderPlayerChatTools() {
   if (stateBag.gmUnlocked) return "";
   const actor = currentActor();
-  if (!actor) {
-    return `
-      <div class="chat-tools-panel">
-        <div class="mini-title">私聊 / 关注</div>
-        <div class="hint">先创建或登录玩家账号。</div>
-      </div>
-    `;
-  }
-
-  const candidates = contactCandidates();
+  if (!actor) return "";
   const contacts = acceptedContacts();
-  const targetOptions = candidates.map((character) => `
-    <option value="${character.id}">${escapeHtml(character.name)} ${escapeHtml(character.handle)} - ${relationshipLabel(character.id)}</option>
-  `).join("");
   const memberOptions = contacts.map((character) => `
     <label class="member-option compact">
       <input type="checkbox" class="private-member-checkbox" value="${character.id}">
@@ -314,23 +315,19 @@ function renderPlayerChatTools() {
   `).join("");
 
   return `
-    <div class="chat-tools-panel">
-      <div class="mini-title">私聊 / 关注</div>
-      <select id="follow-target" ${candidates.length ? "" : "disabled"}>
-        ${targetOptions || `<option value="">没有可关注账号</option>`}
-      </select>
-      <div class="form-row tight">
-        <button class="secondary-button" type="button" data-action="request-follow" ${candidates.length ? "" : "disabled"}>请求关注</button>
-        <button class="primary-button" type="button" data-action="open-direct-chat" ${candidates.length ? "" : "disabled"}>打开私聊</button>
-      </div>
-      <div class="hint">私聊需要 GM 批准关注后才能开启。</div>
-      <div class="mini-title">玩家私密群聊</div>
-      <input id="private-chat-name" maxlength="80" placeholder="群聊名称">
-      <div class="member-picker compact-picker">
-        ${memberOptions || `<div class="hint padded">暂无已批准联系人。</div>`}
-      </div>
-      <button class="secondary-button" type="button" data-action="create-player-chat" ${contacts.length ? "" : "disabled"}>创建私密群聊</button>
+    <div class="room-list-header">
+      <div class="mini-title">聊天</div>
+      <button class="secondary-button compact-action" type="button" data-action="toggle-private-chat-form" ${contacts.length ? "" : "disabled"}>私密群聊</button>
     </div>
+    ${stateBag.privateChatOpen ? `
+      <div class="private-chat-panel">
+        <input id="private-chat-name" maxlength="80" placeholder="群聊名称">
+        <div class="member-picker compact-picker">
+          ${memberOptions || `<div class="hint padded">暂无已批准联系人。</div>`}
+        </div>
+        <button class="primary-button" type="button" data-action="create-player-chat" ${contacts.length ? "" : "disabled"}>创建</button>
+      </div>
+    ` : ""}
   `;
 }
 
@@ -354,7 +351,7 @@ function renderChats() {
         <header class="thread-header">
           <div>
             <div class="section-title">${escapeHtml(active?.name || "聊天")}</div>
-            <div class="meta">${escapeHtml(memberNames(active).join("、"))}</div>
+            <div class="meta member-links">${renderMemberProfileLinks(active)}</div>
           </div>
         </header>
         <div class="messages" id="messages">
@@ -382,16 +379,82 @@ function renderChats() {
 function renderMessage(message) {
   const author = getActor(message.authorId);
   const mine = author?.id === stateBag.actorId;
+  const hasImage = message.attachment?.type === "image";
+  const hasText = Boolean(String(message.content || "").trim());
   return `
-    <div class="message-row ${mine ? "mine" : ""}">
-      ${renderAvatar(author)}
-      <div class="message-bubble">
-        <div class="meta"><strong>${escapeHtml(author?.name || "Unknown")}</strong> · ${escapeHtml(message.gameTime)}</div>
-        ${formatText(message.content)}
+    <div class="message-row ${mine ? "mine" : ""} ${hasImage ? "with-image" : ""}">
+      <button class="profile-avatar-button" type="button" data-action="view-profile" data-character-id="${author?.id || ""}" ${author ? "" : "disabled"}>
+        ${renderAvatar(author)}
+      </button>
+      <div class="message-bubble ${hasImage ? "has-attachment" : ""} ${hasImage && !hasText ? "image-only" : ""}">
+        <div class="meta">
+          <button class="inline-profile-link" type="button" data-action="view-profile" data-character-id="${author?.id || ""}" ${author ? "" : "disabled"}>
+            <strong>${escapeHtml(author?.name || "Unknown")}</strong>
+          </button>
+          · ${escapeHtml(message.gameTime)}
+        </div>
+        ${hasText ? `<div class="message-text">${formatText(message.content)}</div>` : ""}
         ${message.attachment?.type === "image" ? renderImageAttachment(message.attachment) : ""}
       </div>
     </div>
   `;
+}
+
+function renderProfileOverlay() {
+  if (!stateBag.profileId) return;
+  const profile = getActor(stateBag.profileId);
+  if (!profile) {
+    stateBag.profileId = "";
+    return;
+  }
+  const postCount = (stateBag.data.posts || []).filter((post) => post.authorId === profile.id).length;
+  const messageCount = (stateBag.data.messages || []).filter((message) => message.authorId === profile.id).length;
+  const status = relationshipStatus(profile.id);
+
+  els.viewRoot.insertAdjacentHTML("beforeend", `
+    <div class="profile-backdrop" role="presentation">
+      <section class="profile-modal" role="dialog" aria-modal="true" aria-label="${escapeAttr(profile.name)} profile">
+        <button class="profile-close" type="button" data-action="close-profile" aria-label="Close profile">×</button>
+        <div class="profile-hero">
+          ${renderAvatar(profile)}
+          <div class="profile-heading">
+            <div class="profile-name">${escapeHtml(profile.name)}</div>
+            <div class="profile-handle">${escapeHtml(profile.handle)} · ${typeLabel(profile)}</div>
+          </div>
+        </div>
+        <div class="profile-stats">
+          <div><strong>${postCount}</strong><span>posts</span></div>
+          <div><strong>${messageCount}</strong><span>messages</span></div>
+          <div><strong>${escapeHtml(relationshipLabel(profile.id))}</strong><span>status</span></div>
+        </div>
+        <div class="profile-actions">
+          ${renderProfileActions(profile, status)}
+        </div>
+      </section>
+    </div>
+  `);
+}
+
+function renderProfileActions(profile, status) {
+  const actor = currentActor();
+  if (!actor) return `<div class="hint">创建或登录玩家账号后可以关注与私信。</div>`;
+  if (actor.id === profile.id) return `<div class="hint">这是你当前使用的账号。</div>`;
+  if (stateBag.gmUnlocked) {
+    return `<button class="primary-button" type="button" data-action="open-direct-chat" data-character-id="${profile.id}">以当前身份打开私聊</button>`;
+  }
+  if (status === "accepted") {
+    return `
+      <button class="secondary-button" type="button" disabled>已关注</button>
+      <button class="primary-button" type="button" data-action="open-direct-chat" data-character-id="${profile.id}">私信</button>
+    `;
+  }
+  if (status === "outgoing_pending") {
+    return `<button class="secondary-button" type="button" disabled>等待 GM 批准</button>`;
+  }
+  if (status === "incoming_pending") {
+    return `<button class="secondary-button" type="button" disabled>对方请求等待 GM 批准</button>`;
+  }
+  return `<button class="primary-button" type="button" data-action="request-follow" data-character-id="${profile.id}">关注</button>`;
 }
 
 function renderAccountTools() {
@@ -803,9 +866,25 @@ async function createChat() {
   await refresh(true);
 }
 
-async function requestFollow() {
+function viewProfile(characterId) {
+  if (!characterId || !getActor(characterId)) return;
+  stateBag.profileId = characterId;
+  render();
+}
+
+function closeProfile() {
+  stateBag.profileId = "";
+  render();
+}
+
+function togglePrivateChatForm() {
+  stateBag.privateChatOpen = !stateBag.privateChatOpen;
+  render();
+}
+
+async function requestFollow(targetIdOverride = "") {
   if (!currentActor()) return showNotice("请先创建或登录玩家账号。");
-  const targetId = document.getElementById("follow-target")?.value;
+  const targetId = targetIdOverride || document.getElementById("follow-target")?.value;
   if (!targetId) return showNotice("请选择想要关注的账号。");
   stateBag.data = await api("/api/follows", {
     method: "POST",
@@ -826,9 +905,9 @@ async function updateFollow(followId, status) {
   render();
 }
 
-async function openDirectChat() {
+async function openDirectChat(targetIdOverride = "") {
   if (!currentActor()) return showNotice("请先创建或登录玩家账号。");
-  const targetId = document.getElementById("follow-target")?.value;
+  const targetId = targetIdOverride || document.getElementById("follow-target")?.value;
   if (!targetId) return showNotice("请选择私聊对象。");
   const result = await api("/api/direct-chats", {
     method: "POST",
@@ -836,6 +915,7 @@ async function openDirectChat() {
   });
   stateBag.data = result.state;
   stateBag.activeChatId = result.chatId;
+  stateBag.profileId = "";
   localStorage.setItem("kokubayashi.chatId", stateBag.activeChatId);
   setTab("chats");
   showNotice("私聊已打开。");
@@ -853,6 +933,7 @@ async function createPlayerPrivateChat() {
   });
   stateBag.data = result.state;
   stateBag.activeChatId = result.chatId;
+  stateBag.privateChatOpen = false;
   localStorage.setItem("kokubayashi.chatId", stateBag.activeChatId);
   setTab("chats");
   showNotice("私密群聊已创建。");
@@ -915,22 +996,37 @@ function canDirectMessageClient(sourceId, targetId) {
 }
 
 function relationshipLabel(targetId) {
+  const labels = {
+    self: "本人",
+    accepted: "已关注",
+    outgoing_pending: "等待 GM",
+    incoming_pending: "对方请求中",
+    rejected: "曾被拒绝",
+    none: "未关注"
+  };
+  return labels[relationshipStatus(targetId)] || labels.none;
+}
+
+function relationshipStatus(targetId) {
   const actor = currentActor();
-  if (!actor || !targetId) return "未关注";
+  if (!actor || !targetId) return "none";
+  if (actor.id === targetId) return "self";
   const relationships = stateBag.data?.relationships || [];
-  if (canDirectMessageClient(actor.id, targetId)) return "已批准";
-  const outgoing = relationships.find((item) => item.requesterId === actor.id && item.targetId === targetId && item.status === "pending");
-  if (outgoing) return "等待 GM";
-  const incoming = relationships.find((item) => item.requesterId === targetId && item.targetId === actor.id && item.status === "pending");
-  if (incoming) return "对方请求中";
-  const rejected = relationships.find((item) => (
+  if (canDirectMessageClient(actor.id, targetId)) return "accepted";
+  if (relationships.some((item) => item.requesterId === actor.id && item.targetId === targetId && item.status === "pending")) {
+    return "outgoing_pending";
+  }
+  if (relationships.some((item) => item.requesterId === targetId && item.targetId === actor.id && item.status === "pending")) {
+    return "incoming_pending";
+  }
+  const rejected = relationships.some((item) => (
     item.status === "rejected" &&
     (
       (item.requesterId === actor.id && item.targetId === targetId) ||
       (item.requesterId === targetId && item.targetId === actor.id)
     )
   ));
-  return rejected ? "曾被拒绝" : "未关注";
+  return rejected ? "rejected" : "none";
 }
 
 function currentActor() {
@@ -944,6 +1040,17 @@ function getActor(id) {
 function memberNames(chat) {
   if (!chat) return [];
   return chat.memberIds.map((id) => getActor(id)?.name).filter(Boolean).slice(0, 8);
+}
+
+function renderMemberProfileLinks(chat) {
+  if (!chat) return "";
+  const members = chat.memberIds.map((id) => getActor(id)).filter(Boolean).slice(0, 10);
+  if (!members.length) return "";
+  return members.map((member) => `
+    <button class="member-link" type="button" data-action="view-profile" data-character-id="${member.id}">
+      ${escapeHtml(member.name)}
+    </button>
+  `).join("");
 }
 
 function renderAvatar(actor) {
