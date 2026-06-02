@@ -13,6 +13,7 @@ const GM_PIN = process.env.GM_PIN || "gm";
 const MAX_JSON_BODY_BYTES = 24 * 1024 * 1024;
 const MAX_AVATAR_DATA_URL_LENGTH = 2500000;
 const MAX_EMOJI_DATA_URL_LENGTH = 1000000;
+const MAX_POST_IMAGE_DATA_URL_LENGTH = 9000000;
 const MAX_CHAT_IMAGE_DATA_URL_LENGTH = 9000000;
 
 const MIME = {
@@ -187,6 +188,10 @@ function normalizeState(state) {
   for (const post of state.posts) {
     post.metrics = normalizeMetrics(post.metrics);
     post.replies ||= [];
+    if (post.imageData && !post.attachment) {
+      post.attachment = { type: "image", dataUrl: post.imageData, name: "image" };
+      delete post.imageData;
+    }
   }
 
   for (const message of state.messages) {
@@ -820,11 +825,26 @@ async function routeApi(req, res, url) {
     const author = authorizeAuthor(req, res, state, body.authorId);
     const content = String(body.content || "").trim();
     if (!author) return;
-    if (!content) return sendJson(res, 400, { error: "Post content is required." });
+
+    let attachment = null;
+    if (body.attachment?.dataUrl) {
+      try {
+        attachment = {
+          type: "image",
+          dataUrl: validateDataUrl(body.attachment.dataUrl, MAX_POST_IMAGE_DATA_URL_LENGTH, "Post image"),
+          name: String(body.attachment.name || "image").trim().slice(0, 80)
+        };
+      } catch (error) {
+        return sendJson(res, 400, { error: error.message });
+      }
+    }
+
+    if (!content && !attachment) return sendJson(res, 400, { error: "Post content or image is required." });
     state.posts.push({
       id: id("post"),
       authorId: author.id,
       content,
+      attachment,
       gameTime: String(body.gameTime || state.settings.gameTime).trim(),
       createdAt: new Date().toISOString(),
       metrics: normalizeMetrics(body.metrics),
@@ -998,6 +1018,10 @@ function exportMarkdown(state) {
     lines.push(`### ${post.gameTime} | ${author?.name || "Unknown"} ${author?.handle || ""}`);
     lines.push("");
     lines.push(post.content);
+    if (post.attachment?.type === "image") {
+      lines.push("");
+      lines.push(`[图片] ${post.attachment.name || "image"}`);
+    }
     lines.push("");
     lines.push(`点赞 ${post.metrics.likes} / 转发 ${post.metrics.reposts} / 浏览 ${post.metrics.views}`);
     if (post.replies?.length) {

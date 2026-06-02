@@ -53,9 +53,16 @@ function bindGlobalEvents() {
   });
 
   document.body.addEventListener("change", (event) => {
-    if (event.target?.id === "message-image") {
-      const hint = document.getElementById("message-image-hint");
-      if (hint) hint.textContent = event.target.files?.[0]?.name || "未选择图片";
+    const imageHints = {
+      "post-image": "未选择图片",
+      "message-image": "未选择图片",
+      "account-avatar": "未选择头像",
+      "avatar-update-file": "未选择头像",
+      "emoji-file": "未选择图片"
+    };
+    if (event.target?.id && imageHints[event.target.id]) {
+      const hint = document.getElementById(`${event.target.id}-hint`);
+      if (hint) hint.textContent = event.target.files?.[0]?.name || imageHints[event.target.id];
     }
   });
 
@@ -93,11 +100,13 @@ async function handleAction(target) {
 }
 
 async function refresh(forceRender) {
+  const previousUpdatedAt = stateBag.data?.updatedAt;
   const data = await api("/api/state");
   stateBag.data = data;
   ensureActor();
   ensureChat();
-  if (forceRender || true) render();
+  const changed = previousUpdatedAt !== data.updatedAt;
+  if (forceRender || (changed && canAutoRender())) render();
 }
 
 function ensureActor() {
@@ -139,6 +148,37 @@ function render() {
   if (stateBag.tab === "gm") renderGm();
 }
 
+function canAutoRender() {
+  const tag = document.activeElement?.tagName;
+  if (["TEXTAREA", "INPUT", "SELECT"].includes(tag)) return false;
+  if (hasPendingFileSelection()) return false;
+  return !hasDraftText();
+}
+
+function hasPendingFileSelection() {
+  return ["post-image", "message-image", "account-avatar", "avatar-update-file", "emoji-file"]
+    .some((id) => (document.getElementById(id)?.files?.length || 0) > 0);
+}
+
+function hasDraftText() {
+  const draftSelector = [
+    "#post-content",
+    "#message-content",
+    ".reply-composer textarea",
+    "#private-chat-name",
+    "#new-chat-name",
+    "#new-character-name",
+    "#account-name",
+    "#account-handle",
+    "#account-passcode",
+    "#login-handle",
+    "#login-passcode",
+    "#emoji-shortcode"
+  ].join(",");
+  return Array.from(document.querySelectorAll(draftSelector))
+    .some((element) => String(element.value || "").trim());
+}
+
 function renderShell() {
   const state = stateBag.data;
   els.viewTitle.textContent = tabNames[stateBag.tab] || "时间线";
@@ -167,7 +207,13 @@ function renderFeed() {
     <div class="feed-layout">
       <section class="composer">
         <textarea id="post-content" maxlength="280" placeholder="${actor ? "现在发生了什么？" : "先创建玩家账号"}" ${actor ? "" : "disabled"}></textarea>
-        ${renderEmojiBar("post-content")}
+        <div class="message-tools post-tools">
+          ${renderEmojiBar("post-content")}
+          <label class="file-picker">图片
+            <input id="post-image" type="file" accept="image/*" ${actor ? "" : "disabled"}>
+          </label>
+          <span id="post-image-hint" class="hint">未选择图片</span>
+        </div>
         <div class="composer-actions">
           <div class="hint">${escapeHtml(stateBag.data.settings.gameTime)} · ${escapeHtml(actor?.name || "未选择账号")}</div>
           <button class="primary-button" type="button" data-action="publish-post" ${actor ? "" : "disabled"}>发布</button>
@@ -210,6 +256,7 @@ function renderPost(post) {
         </div>
       </header>
       <div class="post-content">${formatText(post.content)}</div>
+      ${post.attachment?.type === "image" ? renderImageAttachment(post.attachment, "post-image") : ""}
       <div class="post-actions">
         <button class="metric-button" type="button" data-action="like-post" data-post-id="${post.id}">喜欢 ${post.metrics.likes}</button>
         <span>转发 ${post.metrics.reposts}</span>
@@ -521,12 +568,20 @@ async function publishPost() {
   if (!currentActor()) return showNotice("请先创建或选择玩家账号。");
   const textarea = document.getElementById("post-content");
   const content = textarea?.value.trim();
-  if (!content) return showNotice("帖子内容为空。");
+  const imageInput = document.getElementById("post-image");
+  const imageFile = imageInput?.files?.[0];
+  const attachment = imageFile
+    ? { type: "image", dataUrl: await fileToImageDataUrl(imageFile, 1400, 0.86, 8500000), name: imageFile.name }
+    : null;
+  if (!content && !attachment) return showNotice("帖子内容或图片为空。");
   await api("/api/feed/posts", {
     method: "POST",
-    body: { authorId: stateBag.actorId, content }
+    body: { authorId: stateBag.actorId, content, attachment }
   });
   textarea.value = "";
+  if (imageInput) imageInput.value = "";
+  const hint = document.getElementById("post-image-hint");
+  if (hint) hint.textContent = "未选择图片";
   await refresh(true);
 }
 
@@ -592,6 +647,8 @@ async function sendMessage() {
   });
   textarea.value = "";
   if (imageInput) imageInput.value = "";
+  const hint = document.getElementById("message-image-hint");
+  if (hint) hint.textContent = "未选择图片";
   await refresh(true);
 }
 
@@ -928,9 +985,10 @@ function formatText(value) {
   return text.replace(/\n/g, "<br>");
 }
 
-function renderImageAttachment(attachment) {
+function renderImageAttachment(attachment, className = "chat-image") {
+  const mediaClass = className === "post-image" ? "post-image" : "chat-image";
   return `
-    <figure class="chat-image">
+    <figure class="${mediaClass}">
       <img src="${escapeAttr(attachment.dataUrl)}" alt="${escapeAttr(attachment.name || "image")}">
       <figcaption>${escapeHtml(attachment.name || "image")}</figcaption>
     </figure>
