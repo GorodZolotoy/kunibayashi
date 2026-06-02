@@ -39,6 +39,32 @@ const PALETTE = [
   "#9a6b3a"
 ];
 
+const WEEKDAY_LABELS = ["周一", "周二", "周三", "周四", "周五", "周六", "周日"];
+const SCHOOL_YEAR_MONTHS = [
+  { month: 4, days: 30 },
+  { month: 5, days: 31 },
+  { month: 6, days: 30 },
+  { month: 7, days: 31 },
+  { month: 8, days: 31 },
+  { month: 9, days: 30 },
+  { month: 10, days: 31 },
+  { month: 11, days: 30 },
+  { month: 12, days: 31 },
+  { month: 1, days: 31 },
+  { month: 2, days: 28 },
+  { month: 3, days: 31 }
+];
+
+const LEGACY_DAY_IDS = {
+  day_mon: "day_001",
+  day_tue: "day_002",
+  day_wed: "day_003",
+  day_thu: "day_004",
+  day_fri: "day_005",
+  day_sat: "day_006",
+  day_sun: "day_007"
+};
+
 function ensureState() {
   fs.mkdirSync(DATA_DIR, { recursive: true });
   if (!fs.existsSync(STATE_FILE)) {
@@ -195,12 +221,13 @@ function normalizeState(state) {
     updatedAt: relationship.updatedAt || relationship.createdAt || new Date().toISOString()
   })).filter((relationship) => relationship.requesterId && relationship.targetId);
 
+  state.settings.currentDayId = normalizeCalendarDayId(state.settings.currentDayId);
   state.calendarDays = normalizeCalendarDays(state.calendarDays);
   if (!state.calendarDays.some((day) => day.id === state.settings.currentDayId)) {
-    state.settings.currentDayId = state.calendarDays[0]?.id || "day_mon";
+    state.settings.currentDayId = state.calendarDays[0]?.id || "day_001";
   }
   const currentDay = state.calendarDays.find((day) => day.id === state.settings.currentDayId);
-  if (currentDay) state.settings.schoolDay = currentDay.label;
+  if (currentDay) state.settings.schoolDay = calendarDayDisplay(currentDay);
 
   for (const post of state.posts) {
     post.metrics = normalizeMetrics(post.metrics);
@@ -229,9 +256,9 @@ function defaultEmojis() {
   return [];
 }
 
-function defaultCalendarDays() {
+function weeklyScheduleTemplates() {
   return [
-    makeCalendarDay("day_mon", "周一", "开学首日", [
+    [
       ["08:20", "朝会", "1-A 教室", "出席确认"],
       ["09:00", "现代文", "1-A 教室", "课本第 1 章"],
       ["10:10", "数学", "1-A 教室", "小测验"],
@@ -239,8 +266,8 @@ function defaultCalendarDays() {
       ["12:20", "午休", "中庭 / 食堂", ""],
       ["13:20", "体育", "体育馆", "运动服"],
       ["14:30", "班会", "1-A 教室", "社团登记"]
-    ]),
-    makeCalendarDay("day_tue", "周二", "开学第二日", [
+    ],
+    [
       ["08:20", "朝会", "1-A 教室", ""],
       ["09:00", "世界史", "1-A 教室", "古代文明"],
       ["10:10", "化学", "实验室", "安全说明"],
@@ -248,8 +275,8 @@ function defaultCalendarDays() {
       ["12:20", "午休", "食堂", ""],
       ["13:20", "美术", "美术室", "素描"],
       ["14:30", "社团时间", "各活动室", ""]
-    ]),
-    makeCalendarDay("day_wed", "周三", "开学第三日", [
+    ],
+    [
       ["08:20", "朝会", "1-A 教室", ""],
       ["09:00", "英语", "1-A 教室", "单词测试"],
       ["10:10", "物理", "理科教室", "力学导入"],
@@ -257,8 +284,8 @@ function defaultCalendarDays() {
       ["12:20", "午休", "中庭", ""],
       ["13:20", "音乐", "音乐室", "合唱练习"],
       ["14:30", "自习", "图书室", ""]
-    ]),
-    makeCalendarDay("day_thu", "周四", "开学第四日", [
+    ],
+    [
       ["08:20", "朝会", "1-A 教室", ""],
       ["09:00", "数学", "1-A 教室", "函数"],
       ["10:10", "古典", "1-A 教室", ""],
@@ -266,8 +293,8 @@ function defaultCalendarDays() {
       ["12:20", "午休", "食堂", ""],
       ["13:20", "家庭科", "家庭科教室", ""],
       ["14:30", "社团时间", "各活动室", ""]
-    ]),
-    makeCalendarDay("day_fri", "周五", "开学第五日", [
+    ],
+    [
       ["08:20", "朝会", "1-A 教室", ""],
       ["09:00", "现代文", "1-A 教室", "作文"],
       ["10:10", "英语", "1-A 教室", ""],
@@ -275,22 +302,44 @@ function defaultCalendarDays() {
       ["12:20", "午休", "中庭 / 食堂", ""],
       ["13:20", "体育", "操场", "雨天改体育馆"],
       ["14:30", "周末班会", "1-A 教室", "值日确认"]
-    ]),
-    makeCalendarDay("day_sat", "周六", "周末", [
+    ],
+    [
       ["10:00", "补习 / 社团", "校内", "参加者确认"],
       ["13:00", "自由活动", "校内", ""]
-    ]),
-    makeCalendarDay("day_sun", "周日", "休校日", [
+    ],
+    [
       ["全天", "休校", "校外", "无正式课程"]
-    ])
+    ]
   ];
 }
 
-function makeCalendarDay(idValue, label, dateLabel, rows) {
+function defaultCalendarDays() {
+  const templates = weeklyScheduleTemplates();
+  const days = [];
+  let dayNumber = 1;
+  for (const { month, days: daysInMonth } of SCHOOL_YEAR_MONTHS) {
+    for (let dayOfMonth = 1; dayOfMonth <= daysInMonth; dayOfMonth += 1) {
+      const weekdayIndex = (dayNumber - 1) % WEEKDAY_LABELS.length;
+      const dayId = `day_${String(dayNumber).padStart(3, "0")}`;
+      days.push(makeCalendarDay(dayId, WEEKDAY_LABELS[weekdayIndex], `${month}月${dayOfMonth}日`, templates[weekdayIndex], {
+        dayNumber,
+        month,
+        monthLabel: `${month}月`,
+        dayOfMonth,
+        weekdayIndex
+      }));
+      dayNumber += 1;
+    }
+  }
+  return days;
+}
+
+function makeCalendarDay(idValue, label, dateLabel, rows, meta = {}) {
   return {
     id: idValue,
     label,
     dateLabel,
+    ...meta,
     note: "",
     schedule: rows.map(([time, subject, location, note], index) => ({
       id: `${idValue}_${index + 1}`,
@@ -298,26 +347,46 @@ function makeCalendarDay(idValue, label, dateLabel, rows) {
       subject,
       location,
       note
-    }))
+    })),
+    events: []
   };
 }
 
 function normalizeCalendarDays(days) {
   const fallback = defaultCalendarDays();
-  const source = Array.isArray(days) && days.length ? days : fallback;
-  return source.map((day, index) => {
-    const fallbackDay = fallback[index] || fallback[0];
+  const source = Array.isArray(days) ? days : [];
+  const byId = new Map(source.map((day) => [normalizeCalendarDayId(day.id), day]));
+  const sourceIsYear = source.length >= 300;
+  return fallback.map((fallbackDay, index) => {
+    const legacyId = Object.entries(LEGACY_DAY_IDS).find(([, nextId]) => nextId === fallbackDay.id)?.[0] || "";
+    const day = byId.get(fallbackDay.id) || (legacyId ? byId.get(legacyId) : null) || (sourceIsYear ? source[index] : null) || fallbackDay;
     const brokenDay = calendarDayLooksCorrupt(day);
+    const keepIdentity = sourceIsYear && normalizeCalendarDayId(day.id) === fallbackDay.id && !brokenDay;
     const sourceDay = brokenDay ? fallbackDay : day;
     return {
-      id: String(day.id || fallbackDay.id || id("day")),
-      label: String(sourceDay.label || fallbackDay.label || `Day ${index + 1}`).trim(),
-      dateLabel: String(sourceDay.dateLabel || sourceDay.date || fallbackDay.dateLabel || "").trim(),
+      id: fallbackDay.id,
+      label: String(keepIdentity ? (sourceDay.label || fallbackDay.label) : fallbackDay.label).trim(),
+      dateLabel: String(keepIdentity ? (sourceDay.dateLabel || sourceDay.date || fallbackDay.dateLabel) : fallbackDay.dateLabel).trim(),
+      dayNumber: fallbackDay.dayNumber,
+      month: fallbackDay.month,
+      monthLabel: fallbackDay.monthLabel,
+      dayOfMonth: fallbackDay.dayOfMonth,
+      weekdayIndex: fallbackDay.weekdayIndex,
       note: String(brokenDay ? "" : (day.note || "")).trim(),
-      schedule: normalizeSchedule(sourceDay.schedule),
-      events: normalizeCalendarEvents(day.events).map((event) => ({ ...event, dayId: String(day.id || fallbackDay.id || "") }))
+      schedule: normalizeSchedule(sourceDay.schedule?.length ? sourceDay.schedule : fallbackDay.schedule),
+      events: normalizeCalendarEvents(day.events).map((event) => ({ ...event, dayId: fallbackDay.id }))
     };
   });
+}
+
+function normalizeCalendarDayId(dayId) {
+  const raw = String(dayId || "").trim();
+  return LEGACY_DAY_IDS[raw] || raw || "day_001";
+}
+
+function calendarDayDisplay(day) {
+  if (!day) return "";
+  return `${day.dateLabel || ""} ${day.label || ""}`.trim();
 }
 
 function calendarDayLooksCorrupt(day) {
@@ -1022,11 +1091,12 @@ async function routeApi(req, res, url) {
 
   if (req.method === "PATCH" && url.pathname === "/api/calendar/current") {
     if (!requireAdmin(req, res)) return;
-    const day = state.calendarDays.find((item) => item.id === body.dayId);
+    const requestedDayId = normalizeCalendarDayId(body.dayId);
+    const day = state.calendarDays.find((item) => item.id === requestedDayId);
     if (!day) return sendJson(res, 404, { error: "Calendar day not found." });
     pushUndo(state, "set_current_day", `设置当前日：${day.label}`, ["settings", "calendarDays"], { dayId: day.id });
     state.settings.currentDayId = day.id;
-    state.settings.schoolDay = day.label;
+    state.settings.schoolDay = calendarDayDisplay(day);
     writeState(state);
     sendJson(res, 200, publicState(state));
     return;
@@ -1035,7 +1105,7 @@ async function routeApi(req, res, url) {
   const calendarEventMatch = url.pathname.match(/^\/api\/calendar\/days\/([^/]+)\/events(?:\/([^/]+)(?:\/([^/]+))?)?$/);
   if (calendarEventMatch) {
     if (!requireAdmin(req, res)) return;
-    const dayId = decodeURIComponent(calendarEventMatch[1]);
+    const dayId = normalizeCalendarDayId(decodeURIComponent(calendarEventMatch[1]));
     const eventId = calendarEventMatch[2] ? decodeURIComponent(calendarEventMatch[2]) : "";
     const action = calendarEventMatch[3];
     const day = state.calendarDays.find((item) => item.id === dayId);
@@ -1118,7 +1188,7 @@ async function routeApi(req, res, url) {
 
   if (req.method === "PATCH" && url.pathname.startsWith("/api/calendar/days/")) {
     if (!requireAdmin(req, res)) return;
-    const dayId = decodeURIComponent(url.pathname.split("/").pop());
+    const dayId = normalizeCalendarDayId(decodeURIComponent(url.pathname.split("/").pop()));
     const day = state.calendarDays.find((item) => item.id === dayId);
     if (!day) return sendJson(res, 404, { error: "Calendar day not found." });
     pushUndo(state, "edit_calendar_day", `编辑课程表：${day.label}`, ["settings", "calendarDays"], { dayId });
@@ -1127,7 +1197,7 @@ async function routeApi(req, res, url) {
     if (body.note !== undefined) day.note = String(body.note || "").trim();
     if (body.scheduleText !== undefined) day.schedule = parseScheduleText(body.scheduleText);
     if (Array.isArray(body.schedule)) day.schedule = normalizeSchedule(body.schedule);
-    if (state.settings.currentDayId === day.id) state.settings.schoolDay = day.label;
+    if (state.settings.currentDayId === day.id) state.settings.schoolDay = calendarDayDisplay(day);
     writeState(state);
     sendJson(res, 200, publicState(state));
     return;

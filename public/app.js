@@ -4,6 +4,7 @@ const stateBag = {
   actorId: localStorage.getItem("kokubayashi.actorId") || "",
   activeChatId: localStorage.getItem("kokubayashi.chatId") || "",
   selectedCalendarDayId: localStorage.getItem("kokubayashi.calendarDayId") || "",
+  selectedCalendarMonth: Number(localStorage.getItem("kokubayashi.calendarMonth")) || 4,
   gmScheduleDayId: localStorage.getItem("kokubayashi.gmScheduleDayId") || "",
   profileId: "",
   privateChatOpen: false,
@@ -73,11 +74,15 @@ function bindGlobalEvents() {
     if (event.target?.id === "gm-schedule-day") {
       stateBag.gmScheduleDayId = event.target.value;
       localStorage.setItem("kokubayashi.gmScheduleDayId", stateBag.gmScheduleDayId);
+      const day = getCalendarDay(stateBag.gmScheduleDayId);
+      if (day) setSelectedCalendarMonth(day.month);
       renderGm();
     }
     if (event.target?.id === "event-day") {
       stateBag.gmScheduleDayId = event.target.value;
       localStorage.setItem("kokubayashi.gmScheduleDayId", stateBag.gmScheduleDayId);
+      const day = getCalendarDay(stateBag.gmScheduleDayId);
+      if (day) setSelectedCalendarMonth(day.month);
       renderGm();
     }
   });
@@ -103,6 +108,7 @@ async function handleAction(target) {
   if (action === "delete-bulletin") return deleteBulletin(target.dataset.bulletinId);
   if (action === "select-chat") return selectChat(target.dataset.chatId);
   if (action === "send-message") return sendMessage();
+  if (action === "select-calendar-month") return selectCalendarMonth(target.dataset.month);
   if (action === "select-calendar-day") return selectCalendarDay(target.dataset.dayId);
   if (action === "save-current-calendar-day") return saveCurrentCalendarDay();
   if (action === "save-calendar-schedule") return saveCalendarSchedule();
@@ -483,22 +489,58 @@ function renderMessage(message) {
 function renderCalendar() {
   const days = calendarDays();
   const selected = selectedCalendarDay();
+  const months = calendarMonths();
+  const month = selectedCalendarMonth();
+  const selectedMonth = months.find((item) => item.month === month) || months[0];
+  const monthDays = days.filter((day) => Number(day.month) === Number(selectedMonth?.month));
+  const leadingBlanks = Array.from({ length: Number(monthDays[0]?.weekdayIndex || 0) });
+  const currentDayId = stateBag.data.settings.currentDayId;
   els.viewRoot.innerHTML = `
     <div class="calendar-layout">
       <section class="calendar-days" aria-label="校历">
-        ${days.map((day) => `
-          <button class="calendar-day ${day.id === selected?.id ? "selected" : ""} ${day.id === stateBag.data.settings.currentDayId ? "current" : ""}" type="button" data-action="select-calendar-day" data-day-id="${day.id}">
-            <span class="day-label">${escapeHtml(day.label)}</span>
-            <span class="day-date">${escapeHtml(day.dateLabel || "")}</span>
-            <span class="day-count">${(day.schedule || []).length} 节</span>
+        <div class="month-strip" aria-label="月份">
+          ${months.map((item) => {
+            const isCurrentMonth = days.some((day) => Number(day.month) === item.month && day.id === currentDayId);
+            return `
+              <button class="month-button ${item.month === Number(selectedMonth?.month) ? "active" : ""} ${isCurrentMonth ? "current" : ""}" type="button" data-action="select-calendar-month" data-month="${item.month}">
+                <span>${escapeHtml(item.label)}</span>
+                <small>${item.count}天</small>
+              </button>
+            `;
+          }).join("")}
+        </div>
+        <div class="calendar-month-head">
+          <div>
+            <div class="mini-title">国林学园年度校历</div>
+            <div class="section-title">${escapeHtml(selectedMonth?.label || "校历")}</div>
+          </div>
+          <div class="meta">${days.length} 天</div>
+        </div>
+        <div class="calendar-month-grid" role="grid" aria-label="${escapeAttr(selectedMonth?.label || "校历")}">
+          ${["一", "二", "三", "四", "五", "六", "日"].map((label) => `<div class="weekday-cell">${label}</div>`).join("")}
+          ${leadingBlanks.map(() => `<div class="calendar-day blank" aria-hidden="true"></div>`).join("")}
+          ${monthDays.map((day) => {
+            const scheduleCount = (day.schedule || []).length;
+            const eventCount = (day.events || []).length;
+            const countText = [
+              scheduleCount ? `${scheduleCount} 节` : "休",
+              eventCount ? `${eventCount} 事件` : ""
+            ].filter(Boolean).join(" · ");
+            return `
+          <button class="calendar-day ${day.id === selected?.id ? "selected" : ""} ${day.id === currentDayId ? "current" : ""} ${eventCount ? "has-events" : ""}" type="button" data-action="select-calendar-day" data-day-id="${day.id}" aria-label="${escapeAttr(dayOptionLabel(day))}">
+            <span class="day-number">${escapeHtml(String(day.dayOfMonth || ""))}</span>
+            <span class="day-weekday">${escapeHtml(day.label || "")}</span>
+            <span class="day-count">${escapeHtml(countText)}</span>
           </button>
-        `).join("")}
+            `;
+          }).join("")}
+        </div>
       </section>
       <section class="schedule-panel">
         <header class="schedule-header">
           <div>
-            <div class="section-title">${escapeHtml(selected?.label || "校历")}</div>
-            <div class="meta">${escapeHtml(selected?.dateLabel || "")}${selected?.id === stateBag.data.settings.currentDayId ? " · 当前日" : ""}</div>
+            <div class="section-title">${escapeHtml(selected?.dateLabel || selected?.label || "校历")}</div>
+            <div class="meta">${escapeHtml([selected?.label || "", selected?.id === stateBag.data.settings.currentDayId ? "当前日" : ""].filter(Boolean).join(" · "))}</div>
           </div>
         </header>
         ${selected?.note ? `<div class="schedule-note">${escapeHtml(selected.note)}</div>` : ""}
@@ -757,7 +799,7 @@ function renderBulletinComposer(chars, days) {
           <label>关联日期
             <select id="bulletin-day">
               <option value="">不关联日期</option>
-              ${days.map((day) => `<option value="${day.id}">${escapeHtml(day.label)} ${escapeHtml(day.dateLabel || "")}</option>`).join("")}
+              ${renderDayOptions(days, "")}
             </select>
           </label>
           <label>可见性
@@ -794,7 +836,7 @@ function renderCalendarEventManager(days, gmDay) {
       <div class="form-grid">
         <label>编辑日期
           <select id="event-day">
-            ${days.map((item) => `<option value="${item.id}" ${item.id === day?.id ? "selected" : ""}>${escapeHtml(item.label)} ${escapeHtml(item.dateLabel || "")}</option>`).join("")}
+            ${renderDayOptions(days, day?.id)}
           </select>
         </label>
         <div class="two-col">
@@ -948,13 +990,13 @@ function renderGm() {
         <div class="form-grid">
           <label>当前日
             <select id="gm-current-day">
-              ${days.map((day) => `<option value="${day.id}" ${day.id === stateBag.data.settings.currentDayId ? "selected" : ""}>${escapeHtml(day.label)} ${escapeHtml(day.dateLabel || "")}</option>`).join("")}
+              ${renderDayOptions(days, stateBag.data.settings.currentDayId)}
             </select>
           </label>
           <button class="primary-button" type="button" data-action="save-current-calendar-day">设为当前日</button>
           <label>编辑日程
             <select id="gm-schedule-day">
-              ${days.map((day) => `<option value="${day.id}" ${day.id === gmDay?.id ? "selected" : ""}>${escapeHtml(day.label)} ${escapeHtml(day.dateLabel || "")}</option>`).join("")}
+              ${renderDayOptions(days, gmDay?.id)}
             </select>
           </label>
           <div class="two-col">
@@ -1113,10 +1155,24 @@ function selectChat(chatId) {
   renderChats();
 }
 
+function selectCalendarMonth(month) {
+  const selectedMonth = setSelectedCalendarMonth(month);
+  const monthDays = calendarDays().filter((day) => Number(day.month) === selectedMonth);
+  if (monthDays.length && !monthDays.some((day) => day.id === stateBag.selectedCalendarDayId)) {
+    const currentInMonth = monthDays.find((day) => day.id === stateBag.data?.settings?.currentDayId);
+    const nextDay = currentInMonth || monthDays[0];
+    stateBag.selectedCalendarDayId = nextDay.id;
+    localStorage.setItem("kokubayashi.calendarDayId", nextDay.id);
+  }
+  renderCalendar();
+}
+
 function selectCalendarDay(dayId) {
-  if (!getCalendarDay(dayId)) return;
-  stateBag.selectedCalendarDayId = dayId;
-  localStorage.setItem("kokubayashi.calendarDayId", dayId);
+  const day = getCalendarDay(dayId);
+  if (!day) return;
+  stateBag.selectedCalendarDayId = day.id;
+  localStorage.setItem("kokubayashi.calendarDayId", day.id);
+  setSelectedCalendarMonth(day.month);
   renderCalendar();
 }
 
@@ -1189,6 +1245,8 @@ async function saveCurrentCalendarDay() {
   });
   stateBag.selectedCalendarDayId = dayId;
   stateBag.gmScheduleDayId = dayId;
+  const day = getCalendarDay(dayId);
+  if (day) setSelectedCalendarMonth(day.month);
   localStorage.setItem("kokubayashi.calendarDayId", dayId);
   localStorage.setItem("kokubayashi.gmScheduleDayId", dayId);
   showNotice("当前日已更新。");
@@ -1209,6 +1267,8 @@ async function saveCalendarSchedule() {
   });
   stateBag.selectedCalendarDayId = dayId;
   stateBag.gmScheduleDayId = dayId;
+  const day = getCalendarDay(dayId);
+  if (day) setSelectedCalendarMonth(day.month);
   localStorage.setItem("kokubayashi.calendarDayId", dayId);
   localStorage.setItem("kokubayashi.gmScheduleDayId", dayId);
   showNotice("课程表已保存。");
@@ -1263,6 +1323,10 @@ async function createCalendarEvent() {
     }
   });
   stateBag.gmScheduleDayId = dayId;
+  stateBag.selectedCalendarDayId = dayId;
+  const day = getCalendarDay(dayId);
+  if (day) setSelectedCalendarMonth(day.month);
+  localStorage.setItem("kokubayashi.calendarDayId", dayId);
   localStorage.setItem("kokubayashi.gmScheduleDayId", dayId);
   showNotice("校历事件已添加。");
   render();
@@ -1275,6 +1339,8 @@ async function triggerCalendarEvent(dayId, eventId) {
     admin: true
   });
   stateBag.selectedCalendarDayId = dayId;
+  const day = getCalendarDay(dayId);
+  if (day) setSelectedCalendarMonth(day.month);
   localStorage.setItem("kokubayashi.calendarDayId", dayId);
   showNotice("事件已触发，并已发布到公告栏。");
   render();
@@ -1286,6 +1352,8 @@ async function deleteCalendarEvent(dayId, eventId) {
     method: "DELETE",
     admin: true
   });
+  const day = getCalendarDay(dayId);
+  if (day) setSelectedCalendarMonth(day.month);
   showNotice("校历事件已删除。需要的话可以用 GM 撤销。");
   render();
 }
@@ -1528,8 +1596,23 @@ function calendarDays() {
   return stateBag.data?.calendarDays || [];
 }
 
+function normalizeCalendarDayIdClient(dayId) {
+  const legacyIds = {
+    day_mon: "day_001",
+    day_tue: "day_002",
+    day_wed: "day_003",
+    day_thu: "day_004",
+    day_fri: "day_005",
+    day_sat: "day_006",
+    day_sun: "day_007"
+  };
+  const raw = String(dayId || "").trim();
+  return legacyIds[raw] || raw;
+}
+
 function getCalendarDay(dayId) {
-  return calendarDays().find((day) => day.id === dayId);
+  const normalizedDayId = normalizeCalendarDayIdClient(dayId);
+  return calendarDays().find((day) => day.id === normalizedDayId);
 }
 
 function currentCalendarDay() {
@@ -1544,7 +1627,57 @@ function selectedCalendarDay() {
     stateBag.selectedCalendarDayId = next.id;
     localStorage.setItem("kokubayashi.calendarDayId", next.id);
   }
+  if (next?.month) setSelectedCalendarMonth(next.month);
   return next;
+}
+
+function calendarMonths() {
+  const months = [];
+  for (const day of calendarDays()) {
+    const month = Number(day.month);
+    if (!month) continue;
+    let entry = months.find((item) => item.month === month);
+    if (!entry) {
+      entry = { month, label: day.monthLabel || `${month}月`, count: 0 };
+      months.push(entry);
+    }
+    entry.count += 1;
+  }
+  return months;
+}
+
+function selectedCalendarMonth() {
+  const months = calendarMonths();
+  const savedMonth = Number(stateBag.selectedCalendarMonth);
+  if (months.some((item) => item.month === savedMonth)) return savedMonth;
+  const fallbackMonth = Number(selectedCalendarDay()?.month || currentCalendarDay()?.month || months[0]?.month || 4);
+  return setSelectedCalendarMonth(fallbackMonth);
+}
+
+function setSelectedCalendarMonth(month) {
+  const months = calendarMonths();
+  const numericMonth = Number(month);
+  const nextMonth = months.some((item) => item.month === numericMonth)
+    ? numericMonth
+    : Number(months[0]?.month || 4);
+  stateBag.selectedCalendarMonth = nextMonth;
+  localStorage.setItem("kokubayashi.calendarMonth", String(nextMonth));
+  return nextMonth;
+}
+
+function dayOptionLabel(day) {
+  return `${day?.dateLabel || ""} ${day?.label || ""}`.trim() || day?.id || "";
+}
+
+function renderDayOptions(days, selectedId) {
+  const selectedDayId = getCalendarDay(selectedId)?.id || normalizeCalendarDayIdClient(selectedId);
+  return calendarMonths().map((month) => {
+    const options = days
+      .filter((day) => Number(day.month) === month.month)
+      .map((day) => `<option value="${escapeAttr(day.id)}" ${day.id === selectedDayId ? "selected" : ""}>${escapeHtml(dayOptionLabel(day))}</option>`)
+      .join("");
+    return `<optgroup label="${escapeAttr(month.label)}">${options}</optgroup>`;
+  }).join("");
 }
 
 function scheduleToText(schedule) {

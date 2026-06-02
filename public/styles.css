@@ -12,15 +12,23 @@
   --blue: #4f6d7a;
   --shadow: 0 14px 36px rgba(32, 36, 42, 0.1);
   --radius: 8px;
+  --radius-sm: 6px;
 }
 
 * {
   box-sizing: border-box;
 }
 
+html {
+  overflow-x: hidden;
+  overflow-x: clip;
+}
+
 body {
   margin: 0;
   min-height: 100vh;
+  overflow-x: hidden;
+  overflow-x: clip;
   background: var(--paper);
   color: var(--ink);
   font-family: "Segoe UI", "Microsoft YaHei", "Hiragino Sans GB", system-ui, sans-serif;
@@ -169,6 +177,7 @@ button {
 }
 
 .identity-panel {
+  position: relative;
   padding: 12px;
   display: grid;
   gap: 10px;
@@ -465,7 +474,7 @@ textarea {
 
 .calendar-layout {
   display: grid;
-  grid-template-columns: minmax(220px, 310px) minmax(0, 720px);
+  grid-template-columns: minmax(320px, 560px) minmax(0, 720px);
   gap: 14px;
   align-items: start;
 }
@@ -479,20 +488,87 @@ textarea {
 
 .calendar-days {
   display: grid;
-  gap: 8px;
-  padding: 10px;
+  gap: 12px;
+  padding: 12px;
+}
+
+.month-strip {
+  display: grid;
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+  gap: 6px;
+}
+
+.month-button {
+  display: grid;
+  gap: 2px;
+  min-height: 50px;
+  padding: 9px 10px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--surface-strong);
+  color: var(--ink);
+  text-align: left;
+}
+
+.month-button span {
+  font-size: 14px;
+  font-weight: 850;
+}
+
+.month-button small {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 800;
+}
+
+.month-button.active {
+  border-color: var(--teal);
+  background: #edf6f1;
+}
+
+.month-button.current {
+  box-shadow: inset 0 -4px 0 var(--gold);
+}
+
+.calendar-month-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: end;
+  gap: 10px;
+  padding: 2px 2px 0;
+}
+
+.calendar-month-grid {
+  display: grid;
+  grid-template-columns: repeat(7, minmax(0, 1fr));
+  gap: 6px;
+}
+
+.weekday-cell {
+  min-height: 26px;
+  display: grid;
+  place-items: center;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 850;
 }
 
 .calendar-day {
   display: grid;
-  gap: 3px;
+  grid-template-rows: auto 1fr auto;
+  gap: 2px;
   width: 100%;
-  min-height: 74px;
-  padding: 10px;
+  min-height: 76px;
+  padding: 8px;
   border: 1px solid var(--line);
-  border-radius: var(--radius);
+  border-radius: var(--radius-sm);
   background: var(--surface-strong);
   text-align: left;
+}
+
+.calendar-day.blank {
+  visibility: hidden;
+  pointer-events: none;
 }
 
 .calendar-day.current {
@@ -504,16 +580,28 @@ textarea {
   box-shadow: inset 5px 0 0 var(--teal);
 }
 
-.day-label {
-  font-size: 17px;
-  font-weight: 850;
+.calendar-day.has-events .day-count {
+  color: var(--teal);
 }
 
-.day-date,
+.day-number {
+  font-size: 22px;
+  font-weight: 850;
+  line-height: 1;
+}
+
+.day-weekday {
+  align-self: center;
+  color: var(--ink);
+  font-size: 12px;
+  font-weight: 800;
+}
+
 .day-count {
   color: var(--muted);
-  font-size: 12px;
+  font-size: 11px;
   font-weight: 750;
+  line-height: 1.2;
 }
 
 .schedule-panel {
@@ -1100,6 +1188,7 @@ textarea {
   --shadow: 0 18px 48px rgba(18, 35, 28, 0.13);
   --shadow-soft: 0 8px 24px rgba(18, 35, 28, 0.09);
   --radius: 8px;
+  --radius-sm: 6px;
 }
 
 body {
@@ -1459,9 +1548,36 @@ select:focus {
     rgba(255, 253, 244, 0.96);
 }
 
+.month-button {
+  border-color: rgba(15, 95, 63, 0.12);
+  background: rgba(255, 255, 255, 0.68);
+}
+
+.month-button.active {
+  border-color: var(--school-green);
+  background: rgba(217, 231, 191, 0.72);
+  box-shadow: inset 0 -4px 0 var(--school-green);
+}
+
+.month-button.current {
+  border-color: var(--gold);
+}
+
+.calendar-month-head {
+  border-top: 4px solid var(--school-green);
+}
+
+.weekday-cell {
+  color: rgba(18, 35, 28, 0.62);
+}
+
 .calendar-day {
   border-color: rgba(15, 95, 63, 0.12);
   background: rgba(255, 255, 255, 0.64);
+}
+
+.calendar-day.blank {
+  background: transparent;
 }
 
 .calendar-day.current {
@@ -1474,6 +1590,10 @@ select:focus {
   background:
     linear-gradient(90deg, rgba(15, 95, 63, 0.13), rgba(255, 253, 244, 0.96));
   box-shadow: inset 5px 0 0 var(--school-green);
+}
+
+.calendar-day.has-events .day-count {
+  color: var(--school-green);
 }
 
 .schedule-header {
@@ -1674,6 +1794,11 @@ select:focus {
       var(--paper);
   }
 
+  body::before,
+  body::after {
+    display: none;
+  }
+
   .app-shell {
     grid-template-columns: 1fr;
   }
@@ -1686,10 +1811,11 @@ select:focus {
   }
 
   .side-panel::before {
-    width: 112px;
-    height: 220px;
-    right: -34px;
-    bottom: -44px;
+    display: none;
+  }
+
+  .identity-panel::after {
+    display: none;
   }
 
   .brand-row {
@@ -1716,6 +1842,28 @@ select:focus {
   .relationship-grid,
   .gm-grid {
     grid-template-columns: 1fr;
+  }
+
+  .month-strip {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
+
+  .calendar-month-grid {
+    gap: 4px;
+  }
+
+  .calendar-day {
+    min-height: 66px;
+    padding: 6px;
+  }
+
+  .day-number {
+    font-size: 20px;
+  }
+
+  .day-weekday,
+  .day-count {
+    font-size: 10px;
   }
 
   .bottom-nav {
@@ -2051,11 +2199,11 @@ select:focus {
 .identity-panel::after {
   content: "";
   position: absolute;
-  inset: auto -28px -36px auto;
+  inset: auto 0 0 auto;
   width: 128px;
   height: 170px;
   background: rgba(146, 183, 107, 0.16);
-  transform: skewX(-22deg);
+  transform: translate(28px, 36px) skewX(-22deg);
   pointer-events: none;
 }
 
