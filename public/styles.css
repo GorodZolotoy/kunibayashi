@@ -564,6 +564,191 @@ textarea {
   font-family: "Consolas", "SFMono-Regular", monospace;
 }
 
+.bulletin-layout {
+  display: grid;
+  max-width: 900px;
+}
+
+.bulletin-board,
+.bulletin-card,
+.event-list,
+.inbox-column,
+.compact-list,
+.relationship-nodes,
+.relationship-edges,
+.log-list {
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface);
+}
+
+.board-heading {
+  padding: 14px;
+  border-bottom: 1px solid var(--line);
+}
+
+.bulletin-list,
+.event-list,
+.compact-list,
+.log-list {
+  display: grid;
+  gap: 10px;
+  padding: 12px;
+}
+
+.bulletin-card {
+  display: grid;
+  gap: 8px;
+  padding: 14px;
+  border-left: 8px solid var(--teal);
+}
+
+.bulletin-card.rumor {
+  border-left-color: var(--red);
+}
+
+.bulletin-card.school,
+.bulletin-card.club {
+  border-left-color: var(--gold);
+}
+
+.bulletin-card h2 {
+  margin: 0;
+  font-size: 20px;
+  line-height: 1.2;
+  overflow-wrap: anywhere;
+}
+
+.bulletin-type,
+.event-type {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 900;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.bulletin-content {
+  line-height: 1.55;
+  overflow-wrap: anywhere;
+}
+
+.event-list {
+  margin: 0 14px 14px;
+}
+
+.event-card {
+  display: grid;
+  gap: 5px;
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface-strong);
+}
+
+.event-card.triggered {
+  border-color: rgba(15, 95, 63, 0.28);
+  box-shadow: inset 5px 0 0 var(--teal);
+}
+
+.event-title {
+  font-weight: 850;
+}
+
+.gm-wide {
+  grid-column: 1 / -1;
+}
+
+.inbox-grid,
+.relationship-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.inbox-column {
+  display: grid;
+  align-content: start;
+  gap: 8px;
+  padding: 10px;
+  min-width: 0;
+}
+
+.inbox-item,
+.compact-row,
+.log-row,
+.relationship-node,
+.relationship-edge {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  min-width: 0;
+  padding: 9px 10px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface-strong);
+}
+
+.inbox-item > div,
+.compact-row > div,
+.log-row > div,
+.relationship-node > div {
+  min-width: 0;
+}
+
+.compact-action {
+  min-height: 30px;
+  padding: 5px 9px;
+  font-size: 12px;
+}
+
+.row-actions {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.relationship-grid {
+  grid-template-columns: minmax(240px, 360px) minmax(0, 1fr);
+}
+
+.relationship-nodes,
+.relationship-edges {
+  display: grid;
+  gap: 8px;
+  padding: 10px;
+  max-height: 420px;
+  overflow: auto;
+}
+
+.relationship-edge.accepted {
+  border-color: rgba(15, 95, 63, 0.24);
+}
+
+.relationship-edge.pending {
+  border-color: rgba(201, 154, 61, 0.42);
+}
+
+.relationship-edge.rejected {
+  border-color: rgba(165, 72, 61, 0.28);
+}
+
+.log-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.message-delete {
+  margin-top: 8px;
+  min-height: 28px;
+  padding: 4px 8px;
+  font-size: 12px;
+}
+
 .room-list {
   padding: 10px;
   display: grid;
@@ -832,6 +1017,8 @@ textarea {
 
   .chat-layout,
   .calendar-layout,
+  .inbox-grid,
+  .relationship-grid,
   .gm-grid,
   .two-col {
     grid-template-columns: 1fr;
@@ -851,7 +1038,7 @@ textarea {
     right: 0;
     bottom: 0;
     display: grid;
-    grid-template-columns: repeat(4, 1fr);
+    grid-template-columns: repeat(5, 1fr);
     gap: 0;
     padding: 8px;
     background: rgba(247, 244, 238, 0.96);
@@ -1315,6 +1502,46 @@ select:focus {
   background: #fff7dc;
 }
 
+.bulletin-board,
+.bulletin-card,
+.event-list,
+.inbox-column,
+.compact-list,
+.relationship-nodes,
+.relationship-edges,
+.log-list {
+  border-color: rgba(15, 95, 63, 0.14);
+  background: rgba(255, 253, 244, 0.96);
+  box-shadow: var(--shadow-soft);
+}
+
+.board-heading {
+  background: var(--school-green);
+  border-bottom: 0;
+}
+
+.board-heading .section-title,
+.board-heading .meta {
+  color: var(--cream);
+}
+
+.bulletin-card,
+.event-card,
+.inbox-item,
+.compact-row,
+.log-row,
+.relationship-node,
+.relationship-edge {
+  border-color: rgba(15, 95, 63, 0.13);
+  background: rgba(255, 254, 248, 0.9);
+}
+
+.bulletin-card {
+  background:
+    linear-gradient(122deg, transparent 0 72%, rgba(146, 183, 107, 0.13) 72%),
+    rgba(255, 254, 248, 0.94);
+}
+
 .chat-tools-panel {
   background:
     linear-gradient(136deg, rgba(15, 95, 63, 0.12) 0 36%, transparent 36%),
@@ -1485,6 +1712,8 @@ select:focus {
 
   .chat-layout,
   .calendar-layout,
+  .inbox-grid,
+  .relationship-grid,
   .gm-grid {
     grid-template-columns: 1fr;
   }

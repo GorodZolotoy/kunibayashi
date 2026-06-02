@@ -144,14 +144,17 @@ function createInitialState() {
         createdAt: now
       }
     ],
+    bulletins: [],
     emojis: defaultEmojis(),
     relationships: [],
+    auditLog: [],
+    undoStack: [],
     updatedAt: now
   };
 }
 
 function normalizeState(state) {
-  state.version = Math.max(Number(state.version || 1), 4);
+  state.version = Math.max(Number(state.version || 1), 5);
   state.settings ||= {};
   state.settings.gameTime ||= "开学首日 18:12";
   state.settings.schoolDay ||= "周一";
@@ -163,8 +166,11 @@ function normalizeState(state) {
   state.calendarDays ||= defaultCalendarDays();
   state.posts ||= [];
   state.messages ||= [];
+  state.bulletins ||= [];
   state.emojis ||= defaultEmojis();
   state.relationships ||= [];
+  state.auditLog ||= [];
+  state.undoStack ||= [];
 
   for (const character of state.characters) {
     character.avatarText ||= avatarText(character.name);
@@ -211,6 +217,10 @@ function normalizeState(state) {
       delete message.imageData;
     }
   }
+
+  state.bulletins = normalizeBulletins(state.bulletins);
+  state.auditLog = normalizeAuditLog(state.auditLog);
+  state.undoStack = normalizeUndoStack(state.undoStack);
 
   return state;
 }
@@ -302,7 +312,8 @@ function normalizeCalendarDays(days) {
       label: String(day.label || fallbackDay.label || `Day ${index + 1}`).trim(),
       dateLabel: String(day.dateLabel || day.date || fallbackDay.dateLabel || "").trim(),
       note: String(day.note || "").trim(),
-      schedule: normalizeSchedule(day.schedule)
+      schedule: normalizeSchedule(day.schedule),
+      events: normalizeCalendarEvents(day.events).map((event) => ({ ...event, dayId: String(day.id || fallbackDay.id || "") }))
     };
   });
 }
@@ -336,6 +347,74 @@ function parseScheduleText(value) {
         note: parts.slice(3).join(" | ")
       };
     });
+}
+
+function normalizeCalendarEvents(events) {
+  if (!Array.isArray(events)) return [];
+  return events.map((event, index) => ({
+    id: event.id || id("event"),
+    dayId: String(event.dayId || "").trim(),
+    type: normalizeEventType(event.type),
+    title: String(event.title || `Event ${index + 1}`).trim(),
+    detail: String(event.detail || event.content || "").trim(),
+    triggerTarget: ["bulletin", "none"].includes(event.triggerTarget) ? event.triggerTarget : "bulletin",
+    isPublic: event.isPublic === true,
+    triggeredAt: event.triggeredAt || "",
+    createdAt: event.createdAt || new Date().toISOString(),
+    updatedAt: event.updatedAt || event.createdAt || new Date().toISOString()
+  })).filter((event) => event.title || event.detail);
+}
+
+function normalizeEventType(value) {
+  const type = String(value || "event").trim().toLowerCase();
+  if (["event", "rumor", "exam", "club", "incident", "notice"].includes(type)) return type;
+  return "event";
+}
+
+function normalizeBulletins(bulletins) {
+  if (!Array.isArray(bulletins)) return [];
+  return bulletins.map((bulletin, index) => ({
+    id: bulletin.id || id("bulletin"),
+    type: normalizeBulletinType(bulletin.type),
+    title: String(bulletin.title || `Bulletin ${index + 1}`).trim(),
+    content: String(bulletin.content || "").trim(),
+    authorId: String(bulletin.authorId || "").trim(),
+    dayId: String(bulletin.dayId || "").trim(),
+    gameTime: String(bulletin.gameTime || "").trim(),
+    isPublic: bulletin.isPublic !== false,
+    sourceEventId: String(bulletin.sourceEventId || "").trim(),
+    createdAt: bulletin.createdAt || new Date().toISOString(),
+    updatedAt: bulletin.updatedAt || bulletin.createdAt || new Date().toISOString()
+  })).filter((bulletin) => bulletin.title || bulletin.content);
+}
+
+function normalizeBulletinType(value) {
+  const type = String(value || "bulletin").trim().toLowerCase();
+  if (["bulletin", "rumor", "school", "club", "incident"].includes(type)) return type;
+  return "bulletin";
+}
+
+function normalizeAuditLog(entries) {
+  if (!Array.isArray(entries)) return [];
+  return entries.map((entry) => ({
+    id: entry.id || id("log"),
+    action: String(entry.action || "update").trim(),
+    label: String(entry.label || "GM update").trim(),
+    details: entry.details && typeof entry.details === "object" ? entry.details : {},
+    createdAt: entry.createdAt || new Date().toISOString()
+  })).slice(0, 80);
+}
+
+function normalizeUndoStack(entries) {
+  if (!Array.isArray(entries)) return [];
+  return entries.map((entry) => ({
+    id: entry.id || id("undo"),
+    action: String(entry.action || "update").trim(),
+    label: String(entry.label || "GM update").trim(),
+    keys: Array.isArray(entry.keys) ? entry.keys.map(String) : [],
+    snapshot: entry.snapshot && typeof entry.snapshot === "object" ? entry.snapshot : {},
+    createdAt: entry.createdAt || new Date().toISOString()
+  })).filter((entry) => entry.keys.length).slice(0, 12);
 }
 
 function readSeedState() {
@@ -493,9 +572,23 @@ function sendJson(res, status, payload) {
 }
 
 function publicState(state) {
+  const adminView = Boolean(state.__adminView);
+  const calendarDays = (state.calendarDays || []).map((day) => ({
+    ...day,
+    events: adminView
+      ? (day.events || [])
+      : (day.events || []).filter((event) => event.isPublic || event.triggeredAt)
+  }));
+
   return {
     ...state,
-    characters: state.characters.map(({ accessToken, auth, ...character }) => character)
+    characters: state.characters.map(({ accessToken, auth, ...character }) => character),
+    calendarDays,
+    bulletins: adminView ? state.bulletins : (state.bulletins || []).filter((bulletin) => bulletin.isPublic !== false),
+    auditLog: adminView ? (state.auditLog || []) : [],
+    undoStack: adminView
+      ? (state.undoStack || []).map(({ snapshot, ...entry }) => entry)
+      : []
   };
 }
 
@@ -638,8 +731,54 @@ function clampInt(value, min) {
   return Math.max(min, number);
 }
 
+function snapshotKeys(state, keys) {
+  const snapshot = {};
+  for (const key of keys) {
+    snapshot[key] = JSON.parse(JSON.stringify(state[key]));
+  }
+  return snapshot;
+}
+
+function pushAudit(state, action, label, details = {}) {
+  state.auditLog ||= [];
+  state.auditLog.unshift({
+    id: id("log"),
+    action,
+    label,
+    details,
+    createdAt: new Date().toISOString()
+  });
+  state.auditLog = state.auditLog.slice(0, 80);
+}
+
+function pushUndo(state, action, label, keys, details = {}) {
+  state.undoStack ||= [];
+  state.undoStack.unshift({
+    id: id("undo"),
+    action,
+    label,
+    keys,
+    snapshot: snapshotKeys(state, keys),
+    createdAt: new Date().toISOString()
+  });
+  state.undoStack = state.undoStack.slice(0, 12);
+  pushAudit(state, action, label, { ...details, undoable: true });
+}
+
+function restoreLastUndo(state) {
+  const entry = state.undoStack.shift();
+  if (!entry) return null;
+  for (const key of entry.keys) {
+    state[key] = JSON.parse(JSON.stringify(entry.snapshot[key]));
+  }
+  normalizeState(state);
+  pushAudit(state, "undo", `Undid ${entry.label}`, { undoId: entry.id, action: entry.action });
+  return entry;
+}
+
 async function routeApi(req, res, url) {
   const state = readState();
+  Object.defineProperty(state, "__adminView", { value: isAdmin(req), enumerable: false });
 
   if (req.method === "GET" && url.pathname === "/api/state") {
     sendJson(res, 200, publicState(state));
@@ -658,6 +797,72 @@ async function routeApi(req, res, url) {
   }
 
   const body = ["POST", "PATCH", "DELETE"].includes(req.method) ? await readBody(req) : {};
+
+  if (req.method === "POST" && url.pathname === "/api/gm/undo") {
+    if (!requireAdmin(req, res)) return;
+    const entry = restoreLastUndo(state);
+    if (!entry) return sendJson(res, 400, { error: "There is no GM action to undo." });
+    writeState(state);
+    sendJson(res, 200, publicState(state));
+    return;
+  }
+
+  if (req.method === "POST" && url.pathname === "/api/bulletins") {
+    if (!requireAdmin(req, res)) return;
+    const title = String(body.title || "").trim();
+    const content = String(body.content || "").trim();
+    if (!title && !content) return sendJson(res, 400, { error: "Bulletin title or content is required." });
+    const author = body.authorId ? findCharacter(state, body.authorId) : null;
+    const now = new Date().toISOString();
+    pushUndo(state, "create_bulletin", title || "Create bulletin", ["bulletins"], { type: body.type || "bulletin" });
+    state.bulletins.unshift({
+      id: id("bulletin"),
+      type: normalizeBulletinType(body.type),
+      title: title || "Untitled bulletin",
+      content,
+      authorId: author?.id || "",
+      dayId: String(body.dayId || "").trim(),
+      gameTime: String(body.gameTime || state.settings.gameTime).trim(),
+      isPublic: body.isPublic !== false,
+      sourceEventId: String(body.sourceEventId || "").trim(),
+      createdAt: now,
+      updatedAt: now
+    });
+    writeState(state);
+    sendJson(res, 201, publicState(state));
+    return;
+  }
+
+  const bulletinMatch = url.pathname.match(/^\/api\/bulletins\/([^/]+)$/);
+  if (bulletinMatch) {
+    if (!requireAdmin(req, res)) return;
+    const bulletinId = decodeURIComponent(bulletinMatch[1]);
+    const bulletin = state.bulletins.find((item) => item.id === bulletinId);
+    if (!bulletin) return sendJson(res, 404, { error: "Bulletin not found." });
+
+    if (req.method === "PATCH") {
+      pushUndo(state, "edit_bulletin", `Edit bulletin: ${bulletin.title}`, ["bulletins"], { bulletinId });
+      if (body.type !== undefined) bulletin.type = normalizeBulletinType(body.type);
+      if (body.title !== undefined) bulletin.title = String(body.title || bulletin.title).trim();
+      if (body.content !== undefined) bulletin.content = String(body.content || "").trim();
+      if (body.authorId !== undefined) bulletin.authorId = findCharacter(state, body.authorId)?.id || "";
+      if (body.dayId !== undefined) bulletin.dayId = String(body.dayId || "").trim();
+      if (body.gameTime !== undefined) bulletin.gameTime = String(body.gameTime || state.settings.gameTime).trim();
+      if (body.isPublic !== undefined) bulletin.isPublic = body.isPublic !== false;
+      bulletin.updatedAt = new Date().toISOString();
+      writeState(state);
+      sendJson(res, 200, publicState(state));
+      return;
+    }
+
+    if (req.method === "DELETE") {
+      pushUndo(state, "delete_bulletin", `Delete bulletin: ${bulletin.title}`, ["bulletins"], { bulletinId });
+      state.bulletins = state.bulletins.filter((item) => item.id !== bulletinId);
+      writeState(state);
+      sendJson(res, 200, publicState(state));
+      return;
+    }
+  }
 
   if (req.method === "POST" && url.pathname === "/api/player-accounts") {
     const name = String(body.name || "").trim();
@@ -793,6 +998,7 @@ async function routeApi(req, res, url) {
 
   if (req.method === "PATCH" && url.pathname === "/api/settings") {
     if (!requireAdmin(req, res)) return;
+    pushUndo(state, "edit_settings", "Edit time and site settings", ["settings"]);
     state.settings.gameTime = String(body.gameTime || state.settings.gameTime).trim();
     state.settings.schoolDay = String(body.schoolDay || state.settings.schoolDay).trim();
     state.settings.feedName = String(body.feedName || state.settings.feedName).trim();
@@ -806,6 +1012,7 @@ async function routeApi(req, res, url) {
     if (!requireAdmin(req, res)) return;
     const day = state.calendarDays.find((item) => item.id === body.dayId);
     if (!day) return sendJson(res, 404, { error: "Calendar day not found." });
+    pushUndo(state, "set_current_day", `Set current day: ${day.label}`, ["settings", "calendarDays"], { dayId: day.id });
     state.settings.currentDayId = day.id;
     state.settings.schoolDay = day.label;
     writeState(state);
@@ -813,11 +1020,96 @@ async function routeApi(req, res, url) {
     return;
   }
 
+  const calendarEventMatch = url.pathname.match(/^\/api\/calendar\/days\/([^/]+)\/events(?:\/([^/]+)(?:\/([^/]+))?)?$/);
+  if (calendarEventMatch) {
+    if (!requireAdmin(req, res)) return;
+    const dayId = decodeURIComponent(calendarEventMatch[1]);
+    const eventId = calendarEventMatch[2] ? decodeURIComponent(calendarEventMatch[2]) : "";
+    const action = calendarEventMatch[3];
+    const day = state.calendarDays.find((item) => item.id === dayId);
+    if (!day) return sendJson(res, 404, { error: "Calendar day not found." });
+    day.events ||= [];
+
+    if (req.method === "POST" && !eventId) {
+      const title = String(body.title || "").trim();
+      const detail = String(body.detail || body.content || "").trim();
+      if (!title && !detail) return sendJson(res, 400, { error: "Event title or detail is required." });
+      const now = new Date().toISOString();
+      pushUndo(state, "create_calendar_event", `Create event: ${title || detail.slice(0, 32)}`, ["calendarDays"], { dayId });
+      day.events.push({
+        id: id("event"),
+        dayId: day.id,
+        type: normalizeEventType(body.type),
+        title: title || "Untitled event",
+        detail,
+        triggerTarget: ["bulletin", "none"].includes(body.triggerTarget) ? body.triggerTarget : "bulletin",
+        isPublic: body.isPublic === true,
+        triggeredAt: "",
+        createdAt: now,
+        updatedAt: now
+      });
+      writeState(state);
+      sendJson(res, 201, publicState(state));
+      return;
+    }
+
+    const event = day.events.find((item) => item.id === eventId);
+    if (!event) return sendJson(res, 404, { error: "Calendar event not found." });
+
+    if (req.method === "PATCH" && !action) {
+      pushUndo(state, "edit_calendar_event", `Edit event: ${event.title}`, ["calendarDays"], { dayId, eventId });
+      if (body.type !== undefined) event.type = normalizeEventType(body.type);
+      if (body.title !== undefined) event.title = String(body.title || event.title).trim();
+      if (body.detail !== undefined) event.detail = String(body.detail || "").trim();
+      if (body.triggerTarget !== undefined) event.triggerTarget = ["bulletin", "none"].includes(body.triggerTarget) ? body.triggerTarget : event.triggerTarget;
+      if (body.isPublic !== undefined) event.isPublic = body.isPublic === true;
+      event.updatedAt = new Date().toISOString();
+      writeState(state);
+      sendJson(res, 200, publicState(state));
+      return;
+    }
+
+    if (req.method === "POST" && action === "trigger") {
+      pushUndo(state, "trigger_calendar_event", `Trigger event: ${event.title}`, ["calendarDays", "bulletins"], { dayId, eventId });
+      const now = new Date().toISOString();
+      event.triggeredAt = now;
+      event.isPublic = true;
+      event.updatedAt = now;
+      if (event.triggerTarget !== "none") {
+        state.bulletins.unshift({
+          id: id("bulletin"),
+          type: event.type === "rumor" ? "rumor" : "bulletin",
+          title: event.title,
+          content: event.detail,
+          authorId: "",
+          dayId: day.id,
+          gameTime: String(body.gameTime || state.settings.gameTime).trim(),
+          isPublic: true,
+          sourceEventId: event.id,
+          createdAt: now,
+          updatedAt: now
+        });
+      }
+      writeState(state);
+      sendJson(res, 200, publicState(state));
+      return;
+    }
+
+    if (req.method === "DELETE" && !action) {
+      pushUndo(state, "delete_calendar_event", `Delete event: ${event.title}`, ["calendarDays"], { dayId, eventId });
+      day.events = day.events.filter((item) => item.id !== eventId);
+      writeState(state);
+      sendJson(res, 200, publicState(state));
+      return;
+    }
+  }
+
   if (req.method === "PATCH" && url.pathname.startsWith("/api/calendar/days/")) {
     if (!requireAdmin(req, res)) return;
     const dayId = decodeURIComponent(url.pathname.split("/").pop());
     const day = state.calendarDays.find((item) => item.id === dayId);
     if (!day) return sendJson(res, 404, { error: "Calendar day not found." });
+    pushUndo(state, "edit_calendar_day", `Edit schedule: ${day.label}`, ["settings", "calendarDays"], { dayId });
     if (body.label !== undefined) day.label = String(body.label || day.label).trim();
     if (body.dateLabel !== undefined) day.dateLabel = String(body.dateLabel || "").trim();
     if (body.note !== undefined) day.note = String(body.note || "").trim();
@@ -833,6 +1125,7 @@ async function routeApi(req, res, url) {
     if (!requireAdmin(req, res)) return;
     const name = String(body.name || "").trim();
     if (!name) return sendJson(res, 400, { error: "Character name is required." });
+    pushUndo(state, "create_character", `Create character: ${name}`, ["characters"]);
     const character = makeCharacter(id("char"), name, body.handle || makeHandle(name), body.type === "player" ? "player" : "npc");
     if (body.avatarData) {
       try {
@@ -853,6 +1146,7 @@ async function routeApi(req, res, url) {
     const characterId = decodeURIComponent(url.pathname.split("/").pop());
     const character = state.characters.find((item) => item.id === characterId);
     if (!character) return sendJson(res, 404, { error: "Character not found." });
+    pushUndo(state, "edit_character", `Edit character: ${character.name}`, ["characters"], { characterId });
     if (body.name !== undefined) character.name = String(body.name).trim() || character.name;
     if (body.handle !== undefined) character.handle = `@${String(body.handle).replace(/^@/, "").trim()}`;
     if (body.color !== undefined) character.color = String(body.color).trim() || character.color;
@@ -908,6 +1202,7 @@ async function routeApi(req, res, url) {
     if (!["accepted", "rejected"].includes(body.status)) {
       return sendJson(res, 400, { error: "Follow status must be accepted or rejected." });
     }
+    pushUndo(state, "update_follow", `Set follow ${body.status}`, ["relationships"], { relationshipId });
     relationship.status = body.status;
     relationship.updatedAt = new Date().toISOString();
     writeState(state);
@@ -927,6 +1222,7 @@ async function routeApi(req, res, url) {
 
     let chat = directChatFor(state, requester.id, target.id);
     if (!chat) {
+      if (isAdmin(req)) pushUndo(state, "create_direct_chat", `Create direct chat: ${requester.name} / ${target.name}`, ["chats"], { requesterId: requester.id, targetId: target.id });
       chat = {
         id: id("chat"),
         name: `${requester.name} / ${target.name}`,
@@ -972,6 +1268,7 @@ async function routeApi(req, res, url) {
       createdBy: creator.id,
       createdAt: new Date().toISOString()
     };
+    if (isAdmin(req)) pushUndo(state, "create_private_chat", `Create private chat: ${name}`, ["chats"], { creatorId: creator.id, memberCount: memberIds.length });
     state.chats.push(chat);
     writeState(state);
     sendJson(res, 201, { state: publicState(state), chatId: chat.id });
@@ -997,6 +1294,7 @@ async function routeApi(req, res, url) {
     }
 
     if (!content && !attachment) return sendJson(res, 400, { error: "Post content or image is required." });
+    if (isAdmin(req)) pushUndo(state, "create_post", `Create post as ${author.name}`, ["posts"], { authorId: author.id });
     state.posts.push({
       id: id("post"),
       authorId: author.id,
@@ -1031,6 +1329,7 @@ async function routeApi(req, res, url) {
       const content = String(body.content || "").trim();
       if (!author) return;
       if (!content) return sendJson(res, 400, { error: "Reply content is required." });
+      if (isAdmin(req)) pushUndo(state, "create_reply", `Reply to post as ${author.name}`, ["posts"], { postId, authorId: author.id });
       post.replies.push({
         id: id("reply"),
         authorId: author.id,
@@ -1045,6 +1344,7 @@ async function routeApi(req, res, url) {
 
     if (req.method === "PATCH" && !action) {
       if (!requireAdmin(req, res)) return;
+      pushUndo(state, "edit_post", "Edit post metrics/time", ["posts"], { postId });
       if (body.authorId && findCharacter(state, body.authorId)) post.authorId = body.authorId;
       if (body.content !== undefined) post.content = String(body.content).trim();
       if (body.gameTime !== undefined) post.gameTime = String(body.gameTime).trim();
@@ -1056,6 +1356,7 @@ async function routeApi(req, res, url) {
 
     if (req.method === "DELETE" && !action) {
       if (!requireAdmin(req, res)) return;
+      pushUndo(state, "delete_post", "Delete post", ["posts"], { postId });
       state.posts = state.posts.filter((item) => item.id !== postId);
       writeState(state);
       sendJson(res, 200, publicState(state));
@@ -1068,6 +1369,7 @@ async function routeApi(req, res, url) {
     const name = String(body.name || "").trim();
     if (!name) return sendJson(res, 400, { error: "Chat name is required." });
     const memberIds = unique(Array.isArray(body.memberIds) ? body.memberIds : []);
+    pushUndo(state, "create_chat", `Create chat: ${name}`, ["chats"], { memberCount: memberIds.length });
     state.chats.push({
       id: id("chat"),
       name,
@@ -1087,6 +1389,7 @@ async function routeApi(req, res, url) {
     const chatId = decodeURIComponent(url.pathname.split("/").pop());
     const chat = state.chats.find((item) => item.id === chatId);
     if (!chat) return sendJson(res, 404, { error: "Chat not found." });
+    pushUndo(state, "edit_chat", `Edit chat: ${chat.name}`, ["chats"], { chatId });
     if (body.name !== undefined) chat.name = String(body.name).trim() || chat.name;
     if (body.memberIds !== undefined) chat.memberIds = unique(Array.isArray(body.memberIds) ? body.memberIds : []);
     if (body.isPublic !== undefined) chat.isPublic = Boolean(body.isPublic);
@@ -1118,6 +1421,7 @@ async function routeApi(req, res, url) {
     }
 
     if (!content && !attachment) return sendJson(res, 400, { error: "Message content or image is required." });
+    if (isAdmin(req)) pushUndo(state, "send_message", `Send message as ${author.name}`, ["messages"], { chatId: chat.id, authorId: author.id });
     state.messages.push({
       id: id("msg"),
       chatId: chat.id,
@@ -1129,6 +1433,18 @@ async function routeApi(req, res, url) {
     });
     writeState(state);
     sendJson(res, 201, publicState(state));
+    return;
+  }
+
+  if (req.method === "DELETE" && url.pathname.startsWith("/api/messages/")) {
+    if (!requireAdmin(req, res)) return;
+    const messageId = decodeURIComponent(url.pathname.split("/").pop());
+    const message = state.messages.find((item) => item.id === messageId);
+    if (!message) return sendJson(res, 404, { error: "Message not found." });
+    pushUndo(state, "delete_message", "Delete message", ["messages"], { messageId, chatId: message.chatId });
+    state.messages = state.messages.filter((item) => item.id !== messageId);
+    writeState(state);
+    sendJson(res, 200, publicState(state));
     return;
   }
 
@@ -1178,6 +1494,28 @@ function exportMarkdown(state) {
     for (const item of day.schedule || []) {
       const details = [item.location, item.note].filter(Boolean).join(" / ");
       lines.push(`- ${item.time || ""} ${item.subject || ""}${details ? `：${details}` : ""}`.trim());
+    }
+    if (day.events?.length) {
+      lines.push("");
+      lines.push("Events:");
+      for (const event of day.events) {
+        const status = event.triggeredAt ? "triggered" : (event.isPublic ? "public" : "GM only");
+        lines.push(`- [${event.type}] ${event.title} (${status})`);
+        if (event.detail) lines.push(`  ${event.detail}`);
+      }
+    }
+    lines.push("");
+  }
+
+  lines.push("## Bulletin / Rumor Board", "");
+  for (const bulletin of [...(state.bulletins || [])].sort((a, b) => String(a.createdAt).localeCompare(String(b.createdAt)))) {
+    const author = byId.get(bulletin.authorId);
+    lines.push(`### ${bulletin.gameTime || ""} | ${bulletin.title}`.trim());
+    lines.push("");
+    lines.push(`Type: ${bulletin.type}${author ? ` / ${author.name}` : ""}${bulletin.isPublic ? "" : " / GM only"}`);
+    if (bulletin.content) {
+      lines.push("");
+      lines.push(bulletin.content);
     }
     lines.push("");
   }

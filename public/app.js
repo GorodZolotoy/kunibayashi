@@ -26,6 +26,7 @@ const els = {
 
 const tabNames = {
   feed: "时间线",
+  bulletins: "公告",
   chats: "聊天",
   calendar: "校历",
   gm: "GM"
@@ -74,6 +75,11 @@ function bindGlobalEvents() {
       localStorage.setItem("kokubayashi.gmScheduleDayId", stateBag.gmScheduleDayId);
       renderGm();
     }
+    if (event.target?.id === "event-day") {
+      stateBag.gmScheduleDayId = event.target.value;
+      localStorage.setItem("kokubayashi.gmScheduleDayId", stateBag.gmScheduleDayId);
+      renderGm();
+    }
   });
 
   els.actorSelect.addEventListener("change", () => {
@@ -90,11 +96,20 @@ async function handleAction(target) {
   if (action === "reply-post") return replyPost(target.dataset.postId);
   if (action === "save-post") return savePost(target.dataset.postId);
   if (action === "delete-post") return deletePost(target.dataset.postId);
+  if (action === "delete-message") return deleteMessage(target.dataset.messageId);
+  if (action === "open-gm-chat") return openGmChat(target.dataset.chatId);
+  if (action === "open-gm-feed") return setTab("feed");
+  if (action === "publish-bulletin") return publishBulletin();
+  if (action === "delete-bulletin") return deleteBulletin(target.dataset.bulletinId);
   if (action === "select-chat") return selectChat(target.dataset.chatId);
   if (action === "send-message") return sendMessage();
   if (action === "select-calendar-day") return selectCalendarDay(target.dataset.dayId);
   if (action === "save-current-calendar-day") return saveCurrentCalendarDay();
   if (action === "save-calendar-schedule") return saveCalendarSchedule();
+  if (action === "create-calendar-event") return createCalendarEvent();
+  if (action === "trigger-calendar-event") return triggerCalendarEvent(target.dataset.dayId, target.dataset.eventId);
+  if (action === "delete-calendar-event") return deleteCalendarEvent(target.dataset.dayId, target.dataset.eventId);
+  if (action === "gm-undo") return gmUndo();
   if (action === "unlock-gm") return unlockGm();
   if (action === "lock-gm") return lockGm();
   if (action === "save-settings") return saveSettings();
@@ -160,6 +175,7 @@ function render() {
   if (!stateBag.data) return;
   renderShell();
   if (stateBag.tab === "feed") renderFeed();
+  if (stateBag.tab === "bulletins") renderBulletins();
   if (stateBag.tab === "chats") renderChats();
   if (stateBag.tab === "calendar") renderCalendar();
   if (stateBag.tab === "gm") renderGm();
@@ -194,7 +210,11 @@ function hasDraftText() {
     "#emoji-shortcode",
     "#calendar-date-label",
     "#calendar-note",
-    "#calendar-schedule-text"
+    "#calendar-schedule-text",
+    "#bulletin-title",
+    "#bulletin-content",
+    "#event-title",
+    "#event-detail"
   ].join(",");
   return Array.from(document.querySelectorAll(draftSelector))
     .some((element) => String(element.value || "").trim());
@@ -244,6 +264,50 @@ function renderFeed() {
         ${posts.map(renderPost).join("") || `<div class="panel empty-panel">时间线还是空的。</div>`}
       </section>
     </div>
+  `;
+}
+
+function renderBulletins() {
+  const bulletins = [...(stateBag.data.bulletins || [])]
+    .sort((a, b) => String(b.createdAt).localeCompare(String(a.createdAt)));
+  els.viewRoot.innerHTML = `
+    <div class="bulletin-layout">
+      <section class="bulletin-board">
+        <div class="board-heading">
+          <div>
+            <div class="section-title">School Bulletin</div>
+            <div class="meta">Official notes, rumors, and triggered calendar events.</div>
+          </div>
+        </div>
+        <div class="bulletin-list">
+          ${bulletins.map(renderBulletinCard).join("") || `<div class="panel empty-panel">No bulletins yet.</div>`}
+        </div>
+      </section>
+    </div>
+  `;
+}
+
+function renderBulletinCard(bulletin) {
+  const author = getActor(bulletin.authorId);
+  const day = getCalendarDay(bulletin.dayId);
+  const adminTools = stateBag.gmUnlocked ? `
+    <div class="admin-row">
+      <button class="danger-button" type="button" data-action="delete-bulletin" data-bulletin-id="${bulletin.id}">Delete</button>
+    </div>
+  ` : "";
+  return `
+    <article class="bulletin-card ${bulletin.type}">
+      <div class="bulletin-type">${escapeHtml(typeLabelForBulletin(bulletin.type))}</div>
+      <h2>${escapeHtml(bulletin.title || "Untitled")}</h2>
+      <div class="meta">
+        ${escapeHtml(bulletin.gameTime || stateBag.data.settings.gameTime || "")}
+        ${day ? ` · ${escapeHtml(day.label)} ${escapeHtml(day.dateLabel || "")}` : ""}
+        ${author ? ` · ${escapeHtml(author.name)}` : ""}
+        ${bulletin.isPublic === false ? " · GM only" : ""}
+      </div>
+      ${bulletin.content ? `<div class="bulletin-content">${formatText(bulletin.content)}</div>` : ""}
+      ${adminTools}
+    </article>
   `;
 }
 
@@ -410,6 +474,7 @@ function renderMessage(message) {
         </div>
         ${hasText ? `<div class="message-text">${formatText(message.content)}</div>` : ""}
         ${message.attachment?.type === "image" ? renderImageAttachment(message.attachment) : ""}
+        ${stateBag.gmUnlocked ? `<button class="danger-button message-delete" type="button" data-action="delete-message" data-message-id="${message.id}">Delete</button>` : ""}
       </div>
     </div>
   `;
@@ -440,7 +505,25 @@ function renderCalendar() {
         <div class="schedule-list">
           ${(selected?.schedule || []).map(renderScheduleItem).join("") || `<div class="hint">这一天还没有课程。</div>`}
         </div>
+        ${renderCalendarEvents(selected)}
       </section>
+    </div>
+  `;
+}
+
+function renderCalendarEvents(day) {
+  const events = day?.events || [];
+  if (!events.length) return "";
+  return `
+    <div class="event-list">
+      <div class="mini-title">Day Events</div>
+      ${events.map((event) => `
+        <div class="event-card ${event.triggeredAt ? "triggered" : ""}">
+          <div class="event-type">${escapeHtml(typeLabelForEvent(event.type))}${event.triggeredAt ? " · triggered" : ""}</div>
+          <div class="event-title">${escapeHtml(event.title)}</div>
+          ${event.detail ? `<div class="meta">${escapeHtml(event.detail)}</div>` : ""}
+        </div>
+      `).join("")}
     </div>
   `;
 }
@@ -591,6 +674,236 @@ function renderFollowRequest(relationship) {
   `;
 }
 
+function renderGmInbox() {
+  const pendingFollows = (stateBag.data.relationships || []).filter((item) => item.status === "pending");
+  const recentMessages = [...(stateBag.data.messages || [])]
+    .sort((a, b) => String(b.createdAt).localeCompare(String(a.createdAt)))
+    .slice(0, 8);
+  const recentReplies = (stateBag.data.posts || [])
+    .flatMap((post) => (post.replies || []).map((reply) => ({ ...reply, postId: post.id, postContent: post.content })))
+    .sort((a, b) => String(b.createdAt).localeCompare(String(a.createdAt)))
+    .slice(0, 5);
+
+  return `
+    <section class="gm-wide">
+      <div class="section-title">GM Unified Inbox</div>
+      <div class="inbox-grid">
+        <div class="inbox-column">
+          <div class="mini-title">Follow Requests</div>
+          ${pendingFollows.map(renderFollowRequest).join("") || `<div class="hint padded">No pending follows.</div>`}
+        </div>
+        <div class="inbox-column">
+          <div class="mini-title">Recent Messages</div>
+          ${recentMessages.map((message) => {
+            const author = getActor(message.authorId);
+            const chat = getChat(message.chatId);
+            return `
+              <div class="inbox-item">
+                <div>
+                  <div class="name">${escapeHtml(author?.name || "Unknown")} → ${escapeHtml(chat?.name || "Unknown chat")}</div>
+                  <div class="meta">${escapeHtml(message.gameTime || "")} · ${escapeHtml(message.content || (message.attachment ? "[image]" : ""))}</div>
+                </div>
+                <button class="secondary-button compact-action" type="button" data-action="open-gm-chat" data-chat-id="${message.chatId}">Open</button>
+              </div>
+            `;
+          }).join("") || `<div class="hint padded">No messages yet.</div>`}
+        </div>
+        <div class="inbox-column">
+          <div class="mini-title">Timeline Replies</div>
+          ${recentReplies.map((reply) => {
+            const author = getActor(reply.authorId);
+            return `
+              <div class="inbox-item">
+                <div>
+                  <div class="name">${escapeHtml(author?.name || "Unknown")}</div>
+                  <div class="meta">${escapeHtml(reply.gameTime || "")} · ${escapeHtml(reply.content || "")}</div>
+                </div>
+                <button class="secondary-button compact-action" type="button" data-action="open-gm-feed">Open</button>
+              </div>
+            `;
+          }).join("") || `<div class="hint padded">No replies yet.</div>`}
+        </div>
+      </div>
+    </section>
+  `;
+}
+
+function renderBulletinComposer(chars, days) {
+  const recent = [...(stateBag.data.bulletins || [])]
+    .sort((a, b) => String(b.createdAt).localeCompare(String(a.createdAt)))
+    .slice(0, 5);
+  return `
+    <section>
+      <div class="section-title">Rumor / Bulletin Board</div>
+      <div class="form-grid">
+        <div class="two-col">
+          <label>Type
+            <select id="bulletin-type">
+              <option value="bulletin">Bulletin</option>
+              <option value="rumor">Rumor</option>
+              <option value="school">School Notice</option>
+              <option value="club">Club Notice</option>
+              <option value="incident">Incident</option>
+            </select>
+          </label>
+          <label>Author
+            <select id="bulletin-author">
+              <option value="">No visible author</option>
+              ${chars.map((character) => `<option value="${character.id}">${escapeHtml(character.name)}</option>`).join("")}
+            </select>
+          </label>
+        </div>
+        <div class="two-col">
+          <label>Day
+            <select id="bulletin-day">
+              <option value="">No day link</option>
+              ${days.map((day) => `<option value="${day.id}">${escapeHtml(day.label)} ${escapeHtml(day.dateLabel || "")}</option>`).join("")}
+            </select>
+          </label>
+          <label>Visibility
+            <select id="bulletin-public">
+              <option value="true">Player visible</option>
+              <option value="false">GM only</option>
+            </select>
+          </label>
+        </div>
+        <input id="bulletin-title" maxlength="100" placeholder="Title">
+        <textarea id="bulletin-content" maxlength="1200" placeholder="Rumor, school notice, or bulletin text"></textarea>
+        <button class="primary-button" type="button" data-action="publish-bulletin">Publish bulletin</button>
+        <div class="compact-list">
+          ${recent.map((bulletin) => `
+            <div class="compact-row">
+              <div>
+                <div class="name">${escapeHtml(bulletin.title)}</div>
+                <div class="meta">${escapeHtml(typeLabelForBulletin(bulletin.type))} · ${escapeHtml(bulletin.gameTime || "")}${bulletin.isPublic === false ? " · GM only" : ""}</div>
+              </div>
+              <button class="danger-button compact-action" type="button" data-action="delete-bulletin" data-bulletin-id="${bulletin.id}">Delete</button>
+            </div>
+          `).join("") || `<div class="hint padded">No bulletins yet.</div>`}
+        </div>
+      </div>
+    </section>
+  `;
+}
+
+function renderCalendarEventManager(days, gmDay) {
+  const day = gmDay || days[0];
+  return `
+    <section>
+      <div class="section-title">Calendar Event Triggers</div>
+      <div class="form-grid">
+        <label>Edit day
+          <select id="event-day">
+            ${days.map((item) => `<option value="${item.id}" ${item.id === day?.id ? "selected" : ""}>${escapeHtml(item.label)} ${escapeHtml(item.dateLabel || "")}</option>`).join("")}
+          </select>
+        </label>
+        <div class="two-col">
+          <label>Type
+            <select id="event-type">
+              <option value="event">Event</option>
+              <option value="rumor">Rumor</option>
+              <option value="exam">Exam</option>
+              <option value="club">Club</option>
+              <option value="incident">Incident</option>
+              <option value="notice">Notice</option>
+            </select>
+          </label>
+          <label>Visibility
+            <select id="event-public">
+              <option value="false">GM only until triggered</option>
+              <option value="true">Player visible now</option>
+            </select>
+          </label>
+        </div>
+        <input id="event-title" maxlength="100" placeholder="Event title">
+        <textarea id="event-detail" maxlength="900" placeholder="What happens, what unlocks, or what rumor drops"></textarea>
+        <button class="primary-button" type="button" data-action="create-calendar-event">Add event trigger</button>
+        <div class="compact-list">
+          ${(day?.events || []).map((event) => `
+            <div class="compact-row event-row">
+              <div>
+                <div class="name">${escapeHtml(event.title)}</div>
+                <div class="meta">${escapeHtml(typeLabelForEvent(event.type))} · ${event.triggeredAt ? "triggered" : (event.isPublic ? "visible" : "GM only")}</div>
+                ${event.detail ? `<div class="meta">${escapeHtml(event.detail)}</div>` : ""}
+              </div>
+              <div class="row-actions">
+                <button class="secondary-button compact-action" type="button" data-action="trigger-calendar-event" data-day-id="${day.id}" data-event-id="${event.id}" ${event.triggeredAt ? "disabled" : ""}>Trigger</button>
+                <button class="danger-button compact-action" type="button" data-action="delete-calendar-event" data-day-id="${day.id}" data-event-id="${event.id}">Delete</button>
+              </div>
+            </div>
+          `).join("") || `<div class="hint padded">No events on this day.</div>`}
+        </div>
+      </div>
+    </section>
+  `;
+}
+
+function renderRelationshipGraph(chars) {
+  const relationships = stateBag.data.relationships || [];
+  const counts = chars.map((character) => {
+    const accepted = relationships.filter((item) => item.status === "accepted" && (item.requesterId === character.id || item.targetId === character.id)).length;
+    const pending = relationships.filter((item) => item.status === "pending" && (item.requesterId === character.id || item.targetId === character.id)).length;
+    return { character, accepted, pending };
+  }).sort((a, b) => (b.accepted + b.pending) - (a.accepted + a.pending)).slice(0, 12);
+
+  return `
+    <section class="gm-wide">
+      <div class="section-title">Relationship Graph</div>
+      <div class="relationship-grid">
+        <div class="relationship-nodes">
+          ${counts.map(({ character, accepted, pending }) => `
+            <div class="relationship-node">
+              ${renderAvatar(character)}
+              <div>
+                <div class="name">${escapeHtml(character.name)}</div>
+                <div class="meta">${accepted} DM-ready · ${pending} pending</div>
+              </div>
+            </div>
+          `).join("") || `<div class="hint padded">No active characters.</div>`}
+        </div>
+        <div class="relationship-edges">
+          ${relationships.map((relationship) => {
+            const requester = getActor(relationship.requesterId);
+            const target = getActor(relationship.targetId);
+            return `
+              <div class="relationship-edge ${relationship.status}">
+                <span>${escapeHtml(requester?.name || "Unknown")}</span>
+                <strong>${escapeHtml(relationship.status)}</strong>
+                <span>${escapeHtml(target?.name || "Unknown")}</span>
+              </div>
+            `;
+          }).join("") || `<div class="hint padded">No follow relationships yet.</div>`}
+        </div>
+      </div>
+    </section>
+  `;
+}
+
+function renderGmEditLog() {
+  const undo = stateBag.data.undoStack?.[0];
+  const logs = stateBag.data.auditLog || [];
+  return `
+    <section class="gm-wide">
+      <div class="section-title">Undo / Delete / Edit Log</div>
+      <div class="log-toolbar">
+        <button class="primary-button" type="button" data-action="gm-undo" ${undo ? "" : "disabled"}>Undo last GM action</button>
+        <div class="hint">${undo ? escapeHtml(`Ready to undo: ${undo.label}`) : "No undoable GM action yet."}</div>
+      </div>
+      <div class="log-list">
+        ${logs.slice(0, 12).map((entry) => `
+          <div class="log-row">
+            <span class="type-pill">${escapeHtml(entry.action)}</span>
+            <div>
+              <div class="name">${escapeHtml(entry.label)}</div>
+              <div class="meta">${escapeHtml(formatDateTime(entry.createdAt))}</div>
+            </div>
+          </div>
+        `).join("") || `<div class="hint padded">No GM edits logged yet.</div>`}
+      </div>
+    </section>
+  `;
+}
+
 function renderGm() {
   if (!stateBag.gmUnlocked) {
     els.viewRoot.innerHTML = `
@@ -626,6 +939,10 @@ function renderGm() {
         </div>
       </section>
 
+      ${renderGmInbox()}
+      ${renderBulletinComposer(chars, days)}
+      ${renderCalendarEventManager(days, gmDay)}
+
       <section>
         <div class="section-title">校历 / 课程表</div>
         <div class="form-grid">
@@ -648,6 +965,9 @@ function renderGm() {
           <button class="primary-button" type="button" data-action="save-calendar-schedule">保存课程表</button>
         </div>
       </section>
+
+      ${renderRelationshipGraph(chars)}
+      ${renderGmEditLog()}
 
       <section>
         <div class="section-title">新增角色</div>
@@ -770,6 +1090,23 @@ async function deletePost(postId) {
   await refresh(true);
 }
 
+async function deleteMessage(messageId) {
+  if (!messageId) return;
+  await api(`/api/messages/${encodeURIComponent(messageId)}`, {
+    method: "DELETE",
+    admin: true
+  });
+  showNotice("Message deleted. Use GM undo if needed.");
+  await refresh(true);
+}
+
+function openGmChat(chatId) {
+  if (!chatId) return;
+  stateBag.activeChatId = chatId;
+  localStorage.setItem("kokubayashi.chatId", chatId);
+  setTab("chats");
+}
+
 function selectChat(chatId) {
   stateBag.activeChatId = chatId;
   localStorage.setItem("kokubayashi.chatId", chatId);
@@ -875,6 +1212,90 @@ async function saveCalendarSchedule() {
   localStorage.setItem("kokubayashi.calendarDayId", dayId);
   localStorage.setItem("kokubayashi.gmScheduleDayId", dayId);
   showNotice("课程表已保存。");
+  render();
+}
+
+async function publishBulletin() {
+  const title = document.getElementById("bulletin-title")?.value.trim();
+  const content = document.getElementById("bulletin-content")?.value.trim();
+  if (!title && !content) return showNotice("Bulletin title or content is required.");
+  stateBag.data = await api("/api/bulletins", {
+    method: "POST",
+    admin: true,
+    body: {
+      type: document.getElementById("bulletin-type")?.value,
+      title,
+      content,
+      authorId: document.getElementById("bulletin-author")?.value,
+      dayId: document.getElementById("bulletin-day")?.value,
+      isPublic: document.getElementById("bulletin-public")?.value !== "false"
+    }
+  });
+  showNotice("Bulletin published.");
+  render();
+}
+
+async function deleteBulletin(bulletinId) {
+  if (!bulletinId) return;
+  stateBag.data = await api(`/api/bulletins/${encodeURIComponent(bulletinId)}`, {
+    method: "DELETE",
+    admin: true
+  });
+  showNotice("Bulletin deleted. Use GM undo if needed.");
+  render();
+}
+
+async function createCalendarEvent() {
+  const dayId = document.getElementById("event-day")?.value;
+  const title = document.getElementById("event-title")?.value.trim();
+  const detail = document.getElementById("event-detail")?.value.trim();
+  if (!dayId) return showNotice("Choose a calendar day.");
+  if (!title && !detail) return showNotice("Event title or detail is required.");
+  stateBag.data = await api(`/api/calendar/days/${encodeURIComponent(dayId)}/events`, {
+    method: "POST",
+    admin: true,
+    body: {
+      type: document.getElementById("event-type")?.value,
+      title,
+      detail,
+      isPublic: document.getElementById("event-public")?.value === "true",
+      triggerTarget: "bulletin"
+    }
+  });
+  stateBag.gmScheduleDayId = dayId;
+  localStorage.setItem("kokubayashi.gmScheduleDayId", dayId);
+  showNotice("Calendar event added.");
+  render();
+}
+
+async function triggerCalendarEvent(dayId, eventId) {
+  if (!dayId || !eventId) return;
+  stateBag.data = await api(`/api/calendar/days/${encodeURIComponent(dayId)}/events/${encodeURIComponent(eventId)}/trigger`, {
+    method: "POST",
+    admin: true
+  });
+  stateBag.selectedCalendarDayId = dayId;
+  localStorage.setItem("kokubayashi.calendarDayId", dayId);
+  showNotice("Event triggered and posted to bulletins.");
+  render();
+}
+
+async function deleteCalendarEvent(dayId, eventId) {
+  if (!dayId || !eventId) return;
+  stateBag.data = await api(`/api/calendar/days/${encodeURIComponent(dayId)}/events/${encodeURIComponent(eventId)}`, {
+    method: "DELETE",
+    admin: true
+  });
+  showNotice("Calendar event deleted. Use GM undo if needed.");
+  render();
+}
+
+async function gmUndo() {
+  stateBag.data = await api("/api/gm/undo", {
+    method: "POST",
+    admin: true
+  });
+  showNotice("Last GM action undone.");
   render();
 }
 
@@ -1194,6 +1615,10 @@ function getActor(id) {
   return stateBag.data?.characters?.find((item) => item.id === id);
 }
 
+function getChat(id) {
+  return stateBag.data?.chats?.find((item) => item.id === id);
+}
+
 function memberNames(chat) {
   if (!chat) return [];
   return chat.memberIds.map((id) => getActor(id)?.name).filter(Boolean).slice(0, 8);
@@ -1263,6 +1688,36 @@ function typeLabel(actor) {
   if (actor?.type === "account") return "账号";
   if (actor?.type === "player") return "PC";
   return "NPC";
+}
+
+function typeLabelForBulletin(type) {
+  const labels = {
+    bulletin: "Bulletin",
+    rumor: "Rumor",
+    school: "School",
+    club: "Club",
+    incident: "Incident"
+  };
+  return labels[type] || "Bulletin";
+}
+
+function typeLabelForEvent(type) {
+  const labels = {
+    event: "Event",
+    rumor: "Rumor",
+    exam: "Exam",
+    club: "Club",
+    incident: "Incident",
+    notice: "Notice"
+  };
+  return labels[type] || "Event";
+}
+
+function formatDateTime(value) {
+  if (!value) return "";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return String(value);
+  return date.toLocaleString("zh-CN", { hour12: false });
 }
 
 function readAccountTokens() {
