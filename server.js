@@ -1481,8 +1481,6 @@ function exportMarkdown(state) {
     "",
     `- 游戏时间：${state.settings.gameTime}`,
     `- 导出时间：${new Date().toLocaleString("zh-CN")}`,
-    "",
-    "## SNS 时间线",
     ""
   ];
 
@@ -1520,6 +1518,7 @@ function exportMarkdown(state) {
     lines.push("");
   }
 
+  lines.push("## SNS 时间线", "");
   for (const post of [...state.posts].sort((a, b) => String(a.createdAt).localeCompare(String(b.createdAt)))) {
     const author = byId.get(post.authorId);
     lines.push(`### ${post.gameTime} | ${author?.name || "Unknown"} ${author?.handle || ""}`);
