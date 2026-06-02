@@ -129,6 +129,7 @@ async function handleAction(target) {
   if (action === "save-settings") return saveSettings();
   if (action === "create-character") return createCharacter();
   if (action === "save-character-tags") return saveCharacterTags(target.dataset.characterId);
+  if (action === "delete-character") return deleteCharacter(target.dataset.characterId);
   if (action === "create-chat") return createChat();
   if (action === "create-player-account") return createPlayerAccount();
   if (action === "login-player-account") return loginPlayerAccount();
@@ -1151,6 +1152,7 @@ function renderGm() {
               <div class="tag-editor">
                 <input id="character-tags-${escapeAttr(character.id)}" value="${escapeAttr(characterTagInputValue(character))}" placeholder="标签，用逗号分隔">
                 <button class="secondary-button compact-action" type="button" data-action="save-character-tags" data-character-id="${escapeAttr(character.id)}">保存标签</button>
+                <button class="danger-button compact-action" type="button" data-action="delete-character" data-character-id="${escapeAttr(character.id)}">删除</button>
               </div>
             </div>
           `).join("")}
@@ -1516,6 +1518,22 @@ async function saveCharacterTags(characterId) {
     }
   });
   showNotice("标签已保存。");
+  render();
+}
+
+async function deleteCharacter(characterId) {
+  const character = getActor(characterId);
+  if (!character) return;
+  if (!window.confirm(`删除角色「${character.name}」？历史消息会保留，GM 撤销可以恢复。`)) return;
+  stateBag.data = await api(`/api/characters/${encodeURIComponent(characterId)}`, {
+    method: "DELETE",
+    admin: true
+  });
+  if (stateBag.actorId === characterId) {
+    stateBag.actorId = "";
+    localStorage.removeItem("kokubayashi.actorId");
+  }
+  showNotice("角色已删除。需要的话可以用 GM 撤销。");
   render();
 }
 

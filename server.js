@@ -1318,6 +1318,30 @@ async function routeApi(req, res, url) {
     return;
   }
 
+  if (req.method === "DELETE" && url.pathname.startsWith("/api/characters/")) {
+    if (!requireAdmin(req, res)) return;
+    const characterId = decodeURIComponent(url.pathname.split("/").pop());
+    const character = state.characters.find((item) => item.id === characterId);
+    if (!character) return sendJson(res, 404, { error: "Character not found." });
+    if (character.active === false) {
+      sendJson(res, 200, publicState(state));
+      return;
+    }
+
+    pushUndo(state, "delete_character", `删除角色：${character.name}`, ["characters", "chats", "relationships"], { characterId });
+    character.active = false;
+    character.deletedAt = new Date().toISOString();
+    for (const chat of state.chats) {
+      chat.memberIds = (chat.memberIds || []).filter((memberId) => memberId !== character.id);
+    }
+    state.relationships = (state.relationships || []).filter((relationship) => (
+      relationship.requesterId !== character.id && relationship.targetId !== character.id
+    ));
+    writeState(state);
+    sendJson(res, 200, publicState(state));
+    return;
+  }
+
   if (req.method === "PATCH" && url.pathname.startsWith("/api/characters/")) {
     if (!requireAdmin(req, res)) return;
     const characterId = decodeURIComponent(url.pathname.split("/").pop());
