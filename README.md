@@ -29,10 +29,13 @@ $env:GM_PIN="换成你的后台密码"; npm start
 
 ## 已有功能
 
+- 玩家可自助创建账号，并用自己的账号发 SNS 帖子、回复和聊天消息。
+- 玩家账号支持上传头像。
 - 玩家端 SNS 时间线：发帖、回复、点赞。
 - GM 后台：解锁后可切换任意角色身份。
 - GM 可调整帖子时间、点赞、转发、浏览数。
-- LINE 风格群聊：可用当前身份发消息。
+- LINE 风格群聊：可用当前身份发消息，也可发送图片。
+- 通用 emoji 栏：内置常用 emoji，并支持上传自定义图片 emoji。
 - GM 可创建新角色、新群聊、调整游戏内时间。
 - 可导出 Markdown：`/api/export.md`。
 - 第一次启动会从 Vault 的 `玩家信息`、`玩家信息/NPC`、`NPC攻略文件`、`角色档案拆分版` 扫描角色名并生成初始名册。
@@ -47,9 +50,21 @@ $env:GM_PIN="换成你的后台密码"; npm start
   - `GM_PIN`: GM 后台密码
   - `DATA_DIR`: 可选，若 Railway 挂载 Volume，把它设为 Volume 路径
 
-如果不挂载持久化 Volume，Railway 重启后 `data/state.json` 可能丢失。
+如果不挂载持久化 Volume，Railway 重启后玩家账号、头像、聊天图片、自定义 emoji 和 `data/state.json` 都可能丢失。
 
 第一次部署时，如果没有现成的 `data/state.json`，系统会使用 `seed/state.json` 生成初始角色名册。
+
+建议 Railway 挂载 Volume 后设置：
+
+```text
+DATA_DIR=/data
+```
+
+然后在 Variables 设置：
+
+```text
+GM_PIN=换成你的后台密码
+```
 
 ## 数据备份
 

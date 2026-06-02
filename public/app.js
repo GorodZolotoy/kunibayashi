@@ -4,6 +4,7 @@ const stateBag = {
   actorId: localStorage.getItem("kokubayashi.actorId") || "",
   activeChatId: localStorage.getItem("kokubayashi.chatId") || "",
   gmPin: localStorage.getItem("kokubayashi.gmPin") || "",
+  accountTokens: readAccountTokens(),
   gmUnlocked: localStorage.getItem("kokubayashi.gmUnlocked") === "true"
 };
 
@@ -15,7 +16,8 @@ const els = {
   actorPreview: document.getElementById("actor-preview"),
   gmBadge: document.getElementById("gm-badge"),
   notice: document.getElementById("notice"),
-  brandSubtitle: document.getElementById("brand-subtitle")
+  brandSubtitle: document.getElementById("brand-subtitle"),
+  accountTools: document.getElementById("account-tools")
 };
 
 const tabNames = {
@@ -35,15 +37,26 @@ async function boot() {
 
 function bindGlobalEvents() {
   document.body.addEventListener("click", async (event) => {
-    const tabButton = event.target.closest("[data-tab]");
-    if (tabButton) {
-      setTab(tabButton.dataset.tab);
-      return;
-    }
+    try {
+      const tabButton = event.target.closest("[data-tab]");
+      if (tabButton) {
+        setTab(tabButton.dataset.tab);
+        return;
+      }
 
-    const action = event.target.closest("[data-action]");
-    if (!action) return;
-    await handleAction(action, event);
+      const action = event.target.closest("[data-action]");
+      if (!action) return;
+      await handleAction(action, event);
+    } catch (error) {
+      showNotice(error.message || "操作失败。");
+    }
+  });
+
+  document.body.addEventListener("change", (event) => {
+    if (event.target?.id === "message-image") {
+      const hint = document.getElementById("message-image-hint");
+      if (hint) hint.textContent = event.target.files?.[0]?.name || "未选择图片";
+    }
   });
 
   els.actorSelect.addEventListener("change", () => {
@@ -67,6 +80,11 @@ async function handleAction(target) {
   if (action === "save-settings") return saveSettings();
   if (action === "create-character") return createCharacter();
   if (action === "create-chat") return createChat();
+  if (action === "create-player-account") return createPlayerAccount();
+  if (action === "login-player-account") return loginPlayerAccount();
+  if (action === "update-avatar") return updateAvatar();
+  if (action === "upload-emoji") return uploadEmoji();
+  if (action === "insert-emoji") return insertEmoji(target.dataset.target, target.dataset.value);
 }
 
 async function refresh(forceRender) {
@@ -79,7 +97,11 @@ async function refresh(forceRender) {
 
 function ensureActor() {
   const actors = availableActors();
-  if (!actors.length) return;
+  if (!actors.length) {
+    stateBag.actorId = "";
+    localStorage.removeItem("kokubayashi.actorId");
+    return;
+  }
   if (!stateBag.actorId || !actors.some((actor) => actor.id === stateBag.actorId)) {
     stateBag.actorId = actors[0].id;
     localStorage.setItem("kokubayashi.actorId", stateBag.actorId);
@@ -125,20 +147,25 @@ function renderShell() {
   });
 
   const actors = availableActors();
-  els.actorSelect.innerHTML = actors.map((actor) => `<option value="${actor.id}">${escapeHtml(actor.name)} ${escapeHtml(actor.handle)}</option>`).join("");
+  els.actorSelect.innerHTML = actors.length
+    ? actors.map((actor) => `<option value="${actor.id}">${escapeHtml(actor.name)} ${escapeHtml(actor.handle)}</option>`).join("")
+    : `<option value="">创建玩家账号后使用</option>`;
   els.actorSelect.value = stateBag.actorId;
   els.actorPreview.innerHTML = renderActorPreview(getActor(stateBag.actorId));
+  els.accountTools.innerHTML = renderAccountTools();
 }
 
 function renderFeed() {
   const posts = [...stateBag.data.posts].sort((a, b) => String(b.createdAt).localeCompare(String(a.createdAt)));
+  const actor = currentActor();
   els.viewRoot.innerHTML = `
     <div class="feed-layout">
       <section class="composer">
-        <textarea id="post-content" maxlength="280" placeholder="现在发生了什么？"></textarea>
+        <textarea id="post-content" maxlength="280" placeholder="${actor ? "现在发生了什么？" : "先创建玩家账号"}" ${actor ? "" : "disabled"}></textarea>
+        ${renderEmojiBar("post-content")}
         <div class="composer-actions">
-          <div class="hint">${escapeHtml(stateBag.data.settings.gameTime)} · ${escapeHtml(currentActor()?.name || "")}</div>
-          <button class="primary-button" type="button" data-action="publish-post">发布</button>
+          <div class="hint">${escapeHtml(stateBag.data.settings.gameTime)} · ${escapeHtml(actor?.name || "未选择账号")}</div>
+          <button class="primary-button" type="button" data-action="publish-post" ${actor ? "" : "disabled"}>发布</button>
         </div>
       </section>
       <section class="post-list" aria-label="SNS 时间线">
@@ -186,6 +213,7 @@ function renderPost(post) {
       ${replies.length ? `<div class="reply-list">${replies.map(renderReply).join("")}</div>` : ""}
       <div class="reply-composer">
         <textarea id="reply-${post.id}" maxlength="240" placeholder="回复"></textarea>
+        ${renderEmojiBar(`reply-${post.id}`)}
         <div class="reply-actions">
           <button class="secondary-button" type="button" data-action="reply-post" data-post-id="${post.id}">回复</button>
         </div>
@@ -235,6 +263,13 @@ function renderChats() {
         </div>
         <div class="message-form">
           <textarea id="message-content" maxlength="500" placeholder="发送消息"></textarea>
+          <div class="message-tools">
+            ${renderEmojiBar("message-content")}
+            <label class="file-picker">图片
+              <input id="message-image" type="file" accept="image/*">
+            </label>
+            <span id="message-image-hint" class="hint">未选择图片</span>
+          </div>
           <button class="primary-button" type="button" data-action="send-message">发送</button>
         </div>
       </section>
@@ -254,7 +289,65 @@ function renderMessage(message) {
       <div class="message-bubble">
         <div class="meta"><strong>${escapeHtml(author?.name || "Unknown")}</strong> · ${escapeHtml(message.gameTime)}</div>
         ${formatText(message.content)}
+        ${message.attachment?.type === "image" ? renderImageAttachment(message.attachment) : ""}
       </div>
+    </div>
+  `;
+}
+
+function renderAccountTools() {
+  if (stateBag.gmUnlocked) {
+    return `<div class="hint">GM 模式可使用全部角色。</div>`;
+  }
+
+  const actor = currentActor();
+  const accountForm = `
+    <div class="mini-form">
+      <div class="mini-title">创建玩家账号</div>
+      <input id="account-name" maxlength="40" placeholder="显示名">
+      <input id="account-handle" maxlength="32" placeholder="@handle">
+      <input id="account-passcode" maxlength="80" type="password" placeholder="登录码">
+      <label class="file-picker">头像
+        <input id="account-avatar" type="file" accept="image/*">
+      </label>
+      <button class="secondary-button" type="button" data-action="create-player-account">创建账号</button>
+    </div>
+    <div class="mini-form">
+      <div class="mini-title">登录已有账号</div>
+      <input id="login-handle" maxlength="32" placeholder="@handle">
+      <input id="login-passcode" maxlength="80" type="password" placeholder="登录码">
+      <button class="secondary-button" type="button" data-action="login-player-account">登录账号</button>
+    </div>
+  `;
+
+  if (!actor) return accountForm;
+
+  return `
+    <div class="mini-form">
+      <div class="mini-title">账号设置</div>
+      <label class="file-picker">更换头像
+        <input id="avatar-update-file" type="file" accept="image/*">
+      </label>
+      <button class="secondary-button" type="button" data-action="update-avatar">更新头像</button>
+    </div>
+    <div class="mini-form">
+      <div class="mini-title">自定义 Emoji</div>
+      <input id="emoji-shortcode" maxlength="24" placeholder="shortcode">
+      <label class="file-picker">上传图片
+        <input id="emoji-file" type="file" accept="image/*">
+      </label>
+      <button class="secondary-button" type="button" data-action="upload-emoji">上传 Emoji</button>
+    </div>
+  `;
+}
+
+function renderEmojiBar(targetId) {
+  const builtin = ["😀", "😂", "🥹", "😳", "👍", "🙏", "❤️", "✨", "🎵", "☕"];
+  const custom = stateBag.data?.emojis || [];
+  return `
+    <div class="emoji-bar" aria-label="Emoji">
+      ${builtin.map((emoji) => `<button class="emoji-button" type="button" data-action="insert-emoji" data-target="${escapeAttr(targetId)}" data-value="${escapeAttr(emoji)}">${emoji}</button>`).join("")}
+      ${custom.map((emoji) => `<button class="emoji-button custom-emoji-button" type="button" title=":${escapeAttr(emoji.shortcode)}:" data-action="insert-emoji" data-target="${escapeAttr(targetId)}" data-value=":${escapeAttr(emoji.shortcode)}:"><img src="${escapeAttr(emoji.imageData)}" alt=":${escapeAttr(emoji.shortcode)}:"></button>`).join("")}
     </div>
   `;
 }
@@ -317,7 +410,7 @@ function renderGm() {
               <label class="member-option">
                 <input type="checkbox" class="member-checkbox" value="${character.id}">
                 <span>${escapeHtml(character.name)}</span>
-                <span class="type-pill">${character.type === "player" ? "PC" : "NPC"}</span>
+                <span class="type-pill">${typeLabel(character)}</span>
               </label>
             `).join("")}
           </div>
@@ -335,7 +428,7 @@ function renderGm() {
                 <div class="name">${escapeHtml(character.name)}</div>
                 <div class="handle">${escapeHtml(character.handle)}</div>
               </div>
-              <span class="type-pill">${character.type === "player" ? "PC" : "NPC"}</span>
+              <span class="type-pill">${typeLabel(character)}</span>
             </div>
           `).join("")}
         </div>
@@ -345,6 +438,7 @@ function renderGm() {
 }
 
 async function publishPost() {
+  if (!currentActor()) return showNotice("请先创建或选择玩家账号。");
   const textarea = document.getElementById("post-content");
   const content = textarea?.value.trim();
   if (!content) return showNotice("帖子内容为空。");
@@ -362,6 +456,7 @@ async function likePost(postId) {
 }
 
 async function replyPost(postId) {
+  if (!currentActor()) return showNotice("请先创建或选择玩家账号。");
   const textarea = document.getElementById(`reply-${postId}`);
   const content = textarea?.value.trim();
   if (!content) return showNotice("回复内容为空。");
@@ -402,14 +497,21 @@ function selectChat(chatId) {
 }
 
 async function sendMessage() {
+  if (!currentActor()) return showNotice("请先创建或选择玩家账号。");
   const textarea = document.getElementById("message-content");
   const content = textarea?.value.trim();
-  if (!content) return showNotice("消息内容为空。");
+  const imageInput = document.getElementById("message-image");
+  const imageFile = imageInput?.files?.[0];
+  const attachment = imageFile
+    ? { type: "image", dataUrl: await fileToImageDataUrl(imageFile, 1400, 0.82), name: imageFile.name }
+    : null;
+  if (!content && !attachment) return showNotice("消息内容或图片为空。");
   await api("/api/messages", {
     method: "POST",
-    body: { chatId: stateBag.activeChatId, authorId: stateBag.actorId, content }
+    body: { chatId: stateBag.activeChatId, authorId: stateBag.actorId, content, attachment }
   });
   textarea.value = "";
+  if (imageInput) imageInput.value = "";
   await refresh(true);
 }
 
@@ -466,6 +568,92 @@ async function createCharacter() {
   await refresh(true);
 }
 
+async function createPlayerAccount() {
+  const name = document.getElementById("account-name")?.value.trim();
+  if (!name) return showNotice("账号显示名为空。");
+  const passcode = document.getElementById("account-passcode")?.value.trim();
+  if (!passcode || passcode.length < 4) return showNotice("登录码至少 4 个字符。");
+  const avatarFile = document.getElementById("account-avatar")?.files?.[0];
+  const avatarData = avatarFile ? await fileToImageDataUrl(avatarFile, 384, 0.86) : "";
+  const result = await api("/api/player-accounts", {
+    method: "POST",
+    body: {
+      name,
+      handle: document.getElementById("account-handle")?.value,
+      passcode,
+      avatarData
+    }
+  });
+
+  stateBag.accountTokens[result.accountId] = result.accountToken;
+  saveAccountTokens();
+  stateBag.actorId = result.accountId;
+  localStorage.setItem("kokubayashi.actorId", stateBag.actorId);
+  stateBag.data = result.state;
+  showNotice("玩家账号已创建。");
+  render();
+}
+
+async function loginPlayerAccount() {
+  const handle = document.getElementById("login-handle")?.value.trim();
+  const passcode = document.getElementById("login-passcode")?.value.trim();
+  if (!handle || !passcode) return showNotice("请输入 handle 和登录码。");
+  const result = await api("/api/player-accounts/login", {
+    method: "POST",
+    body: { handle, passcode }
+  });
+  stateBag.accountTokens[result.accountId] = result.accountToken;
+  saveAccountTokens();
+  stateBag.actorId = result.accountId;
+  localStorage.setItem("kokubayashi.actorId", stateBag.actorId);
+  stateBag.data = result.state;
+  showNotice("账号已登录。");
+  render();
+}
+
+async function updateAvatar() {
+  if (!currentActor()) return showNotice("请先选择玩家账号。");
+  const file = document.getElementById("avatar-update-file")?.files?.[0];
+  if (!file) return showNotice("请选择头像图片。");
+  const avatarData = await fileToImageDataUrl(file, 384, 0.86);
+  await api(`/api/player-accounts/${encodeURIComponent(stateBag.actorId)}`, {
+    method: "PATCH",
+    body: { avatarData }
+  });
+  showNotice("头像已更新。");
+  await refresh(true);
+}
+
+async function uploadEmoji() {
+  if (!currentActor()) return showNotice("请先选择玩家账号。");
+  const shortcode = document.getElementById("emoji-shortcode")?.value.trim();
+  const file = document.getElementById("emoji-file")?.files?.[0];
+  if (!shortcode) return showNotice("请输入 emoji shortcode。");
+  if (!file) return showNotice("请选择 emoji 图片。");
+  const imageData = await fileToImageDataUrl(file, 128, 0.88);
+  await api("/api/emojis", {
+    method: "POST",
+    body: {
+      ownerId: stateBag.actorId,
+      shortcode,
+      imageData
+    }
+  });
+  showNotice(`Emoji :${shortcode.replace(/^:+|:+$/g, "")}: 已上传。`);
+  await refresh(true);
+}
+
+function insertEmoji(targetId, value) {
+  const target = document.getElementById(targetId);
+  if (!target) return;
+  const start = target.selectionStart ?? target.value.length;
+  const end = target.selectionEnd ?? target.value.length;
+  target.value = `${target.value.slice(0, start)}${value}${target.value.slice(end)}`;
+  const next = start + value.length;
+  target.focus();
+  target.setSelectionRange(next, next);
+}
+
 async function createChat() {
   const name = document.getElementById("new-chat-name")?.value.trim();
   const memberIds = Array.from(document.querySelectorAll(".member-checkbox:checked")).map((item) => item.value);
@@ -480,7 +668,10 @@ async function createChat() {
 
 async function api(path, options = {}) {
   const headers = { "Content-Type": "application/json" };
-  if (options.admin) headers["X-GM-PIN"] = stateBag.gmPin;
+  if ((stateBag.gmUnlocked || options.admin) && stateBag.gmPin) headers["X-GM-PIN"] = stateBag.gmPin;
+  if (!stateBag.gmUnlocked && stateBag.actorId && stateBag.accountTokens[stateBag.actorId]) {
+    headers["X-Account-Token"] = stateBag.accountTokens[stateBag.actorId];
+  }
   const response = await fetch(path, {
     method: options.method || "GET",
     headers,
@@ -496,8 +687,8 @@ async function api(path, options = {}) {
 function availableActors() {
   const chars = stateBag.data?.characters?.filter((item) => item.active !== false) || [];
   if (stateBag.gmUnlocked) return chars;
-  const players = chars.filter((item) => item.type === "player");
-  return players.length ? players : chars;
+  const ownedIds = new Set(Object.keys(stateBag.accountTokens));
+  return chars.filter((item) => item.type === "account" && ownedIds.has(item.id));
 }
 
 function visibleChats() {
@@ -523,6 +714,9 @@ function memberNames(chat) {
 function renderAvatar(actor) {
   const color = actor?.color || "#687075";
   const text = actor?.avatarText || "?";
+  if (actor?.avatarData) {
+    return `<div class="avatar" style="background:${escapeAttr(color)}"><img class="avatar-img" src="${escapeAttr(actor.avatarData)}" alt="${escapeAttr(actor.name)}"></div>`;
+  }
   return `<div class="avatar" style="background:${escapeAttr(color)}">${escapeHtml(text)}</div>`;
 }
 
@@ -530,9 +724,9 @@ function renderActorPreview(actor) {
   if (!actor) return "";
   return `
     ${renderAvatar(actor)}
-    <div class="name-block">
-      <div class="name">${escapeHtml(actor.name)}</div>
-      <div class="handle">${escapeHtml(actor.handle)} · ${actor.type === "player" ? "PC" : "NPC"}</div>
+      <div class="name-block">
+        <div class="name">${escapeHtml(actor.name)}</div>
+      <div class="handle">${escapeHtml(actor.handle)} · ${typeLabel(actor)}</div>
     </div>
   `;
 }
@@ -546,7 +740,83 @@ function showNotice(message) {
 }
 
 function formatText(value) {
-  return escapeHtml(value).replace(/\n/g, "<br>");
+  let text = escapeHtml(value);
+  const emojis = stateBag.data?.emojis || [];
+  for (const emoji of emojis) {
+    const token = `:${emoji.shortcode}:`;
+    const escapedToken = escapeRegExp(escapeHtml(token));
+    text = text.replace(new RegExp(escapedToken, "g"), `<img class="inline-emoji" src="${escapeAttr(emoji.imageData)}" alt="${escapeAttr(token)}">`);
+  }
+  return text.replace(/\n/g, "<br>");
+}
+
+function renderImageAttachment(attachment) {
+  return `
+    <figure class="chat-image">
+      <img src="${escapeAttr(attachment.dataUrl)}" alt="${escapeAttr(attachment.name || "image")}">
+      <figcaption>${escapeHtml(attachment.name || "image")}</figcaption>
+    </figure>
+  `;
+}
+
+function typeLabel(actor) {
+  if (actor?.type === "account") return "账号";
+  if (actor?.type === "player") return "PC";
+  return "NPC";
+}
+
+function readAccountTokens() {
+  try {
+    return JSON.parse(localStorage.getItem("kokubayashi.accountTokens") || "{}");
+  } catch {
+    return {};
+  }
+}
+
+function saveAccountTokens() {
+  localStorage.setItem("kokubayashi.accountTokens", JSON.stringify(stateBag.accountTokens));
+}
+
+function currentAccountToken() {
+  return stateBag.accountTokens[stateBag.actorId] || "";
+}
+
+function fileToImageDataUrl(file, maxEdge, quality) {
+  if (!file.type.startsWith("image/")) {
+    throw new Error("请选择图片文件。");
+  }
+  if (file.type === "image/gif") return readFileAsDataUrl(file);
+
+  return new Promise((resolve, reject) => {
+    const image = new Image();
+    image.onload = () => {
+      const scale = Math.min(1, maxEdge / Math.max(image.naturalWidth, image.naturalHeight));
+      const width = Math.max(1, Math.round(image.naturalWidth * scale));
+      const height = Math.max(1, Math.round(image.naturalHeight * scale));
+      const canvas = document.createElement("canvas");
+      canvas.width = width;
+      canvas.height = height;
+      const context = canvas.getContext("2d");
+      context.drawImage(image, 0, 0, width, height);
+      URL.revokeObjectURL(image.src);
+      resolve(canvas.toDataURL("image/webp", quality));
+    };
+    image.onerror = () => reject(new Error("图片读取失败。"));
+    image.src = URL.createObjectURL(file);
+  });
+}
+
+function readFileAsDataUrl(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result || ""));
+    reader.onerror = () => reject(new Error("文件读取失败。"));
+    reader.readAsDataURL(file);
+  });
+}
+
+function escapeRegExp(value) {
+  return String(value).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
 function escapeHtml(value) {

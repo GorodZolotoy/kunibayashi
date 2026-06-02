@@ -1,5 +1,5 @@
 {
-  "version": 1,
+  "version": 2,
   "settings": {
     "gameTime": "开学首日 18:12",
     "schoolDay": "周一",
@@ -16,7 +16,8 @@
       "avatarText": "三渡",
       "note": "",
       "active": true,
-      "createdAt": "2026-06-02T04:59:53.752Z"
+      "createdAt": "2026-06-02T04:59:53.752Z",
+      "avatarData": ""
     },
     {
       "id": "char_1f7b4db4d25a",
@@ -27,7 +28,8 @@
       "avatarText": "霜月",
       "note": "",
       "active": true,
-      "createdAt": "2026-06-02T04:59:53.754Z"
+      "createdAt": "2026-06-02T04:59:53.754Z",
+      "avatarData": ""
     },
     {
       "id": "char_896c56e25e8e",
@@ -38,7 +40,8 @@
       "avatarText": "水無",
       "note": "",
       "active": true,
-      "createdAt": "2026-06-02T04:59:53.753Z"
+      "createdAt": "2026-06-02T04:59:53.753Z",
+      "avatarData": ""
     },
     {
       "id": "char_e429200a38a8",
@@ -49,7 +52,8 @@
       "avatarText": "藤原",
       "note": "",
       "active": true,
-      "createdAt": "2026-06-02T04:59:53.754Z"
+      "createdAt": "2026-06-02T04:59:53.754Z",
+      "avatarData": ""
     },
     {
       "id": "char_d1e113442462",
@@ -60,7 +64,8 @@
       "avatarText": "五十",
       "note": "",
       "active": true,
-      "createdAt": "2026-06-02T04:59:53.753Z"
+      "createdAt": "2026-06-02T04:59:53.753Z",
+      "avatarData": ""
     },
     {
       "id": "char_9d085ddd2602",
@@ -71,7 +76,8 @@
       "avatarText": "伊万",
       "note": "",
       "active": true,
-      "createdAt": "2026-06-02T04:59:53.753Z"
+      "createdAt": "2026-06-02T04:59:53.753Z",
+      "avatarData": ""
     },
     {
       "id": "char_a1c230f02725",
@@ -82,7 +88,8 @@
       "avatarText": "安娜",
       "note": "",
       "active": true,
-      "createdAt": "2026-06-02T04:59:53.759Z"
+      "createdAt": "2026-06-02T04:59:53.759Z",
+      "avatarData": ""
     },
     {
       "id": "char_98e7b1d85601",
@@ -93,7 +100,8 @@
       "avatarText": "白瀬",
       "note": "",
       "active": true,
-      "createdAt": "2026-06-02T04:59:53.759Z"
+      "createdAt": "2026-06-02T04:59:53.759Z",
+      "avatarData": ""
     },
     {
       "id": "char_738bee39d9c8",
@@ -104,7 +112,8 @@
       "avatarText": "白鳥",
       "note": "",
       "active": true,
-      "createdAt": "2026-06-02T04:59:53.759Z"
+      "createdAt": "2026-06-02T04:59:53.759Z",
+      "avatarData": ""
     },
     {
       "id": "char_58c687c3e1c9",
@@ -115,7 +124,8 @@
       "avatarText": "白崎",
       "note": "",
       "active": true,
-      "createdAt": "2026-06-02T04:59:53.759Z"
+      "createdAt": "2026-06-02T04:59:53.759Z",
+      "avatarData": ""
     },
     {
       "id": "char_fdc09f5ad247",
@@ -126,7 +136,8 @@
       "avatarText": "白星",
       "note": "",
       "active": true,
-      "createdAt": "2026-06-02T04:59:53.759Z"
+      "createdAt": "2026-06-02T04:59:53.759Z",
+      "avatarData": ""
     },
     {
       "id": "char_9afdd865df24",
@@ -137,7 +148,8 @@
       "avatarText": "北原",
       "note": "",
       "active": true,
-      "createdAt": "2026-06-02T04:59:53.759Z"
+      "createdAt": "2026-06-02T04:59:53.759Z",
+      "avatarData": ""
     },
     {
       "id": "char_861c71a930c2",
@@ -148,7 +160,8 @@
       "avatarText": "氷上",
       "note": "",
       "active": true,
-      "createdAt": "2026-06-02T04:59:53.759Z"
+      "createdAt": "2026-06-02T04:59:53.759Z",
+      "avatarData": ""
     },
     {
       "id": "char_4abbee6c9acd",
@@ -159,7 +172,8 @@
       "avatarText": "氷室",
       "note": "",
       "active": true,
-      "createdAt": "2026-06-02T04:59:53.759Z"
+      "createdAt": "2026-06-02T04:59:53.759Z",
+      "avatarData": ""
     },
     {
       "id": "char_58e32fe5627c",
@@ -170,7 +184,8 @@
       "avatarText": "赤城",
       "note": "",
       "active": true,
-      "createdAt": "2026-06-02T04:59:53.759Z"
+      "createdAt": "2026-06-02T04:59:53.759Z",
+      "avatarData": ""
     },
     {
       "id": "char_428c2d476d19",
@@ -181,7 +196,8 @@
       "avatarText": "春野",
       "note": "",
       "active": true,
-      "createdAt": "2026-06-02T04:59:53.759Z"
+      "createdAt": "2026-06-02T04:59:53.759Z",
+      "avatarData": ""
     },
     {
       "id": "char_ecb4f3ecacc3",
@@ -192,7 +208,8 @@
       "avatarText": "崔星",
       "note": "",
       "active": true,
-      "createdAt": "2026-06-02T04:59:53.759Z"
+      "createdAt": "2026-06-02T04:59:53.759Z",
+      "avatarData": ""
     },
     {
       "id": "char_a17a17dd4965",
@@ -203,7 +220,8 @@
       "avatarText": "冬马",
       "note": "",
       "active": true,
-      "createdAt": "2026-06-02T04:59:53.759Z"
+      "createdAt": "2026-06-02T04:59:53.759Z",
+      "avatarData": ""
     },
     {
       "id": "char_e08c778d62a2",
@@ -214,7 +232,8 @@
       "avatarText": "逢坂",
       "note": "",
       "active": true,
-      "createdAt": "2026-06-02T04:59:53.759Z"
+      "createdAt": "2026-06-02T04:59:53.759Z",
+      "avatarData": ""
     },
     {
       "id": "char_44cb00da3a41",
@@ -225,7 +244,8 @@
       "avatarText": "高濑",
       "note": "",
       "active": true,
-      "createdAt": "2026-06-02T04:59:53.755Z"
+      "createdAt": "2026-06-02T04:59:53.755Z",
+      "avatarData": ""
     },
     {
       "id": "char_33d1b33a4054",
@@ -236,7 +256,8 @@
       "avatarText": "黑川",
       "note": "",
       "active": true,
-      "createdAt": "2026-06-02T04:59:53.755Z"
+      "createdAt": "2026-06-02T04:59:53.755Z",
+      "avatarData": ""
     },
     {
       "id": "char_e9bcd6de503e",
@@ -247,7 +268,8 @@
       "avatarText": "花菱",
       "note": "",
       "active": true,
-      "createdAt": "2026-06-02T04:59:53.759Z"
+      "createdAt": "2026-06-02T04:59:53.759Z",
+      "avatarData": ""
     },
     {
       "id": "char_44de2b250cad",
@@ -258,7 +280,8 @@
       "avatarText": "花园",
       "note": "",
       "active": true,
-      "createdAt": "2026-06-02T04:59:53.755Z"
+      "createdAt": "2026-06-02T04:59:53.755Z",
+      "avatarData": ""
     },
     {
       "id": "char_4b17130328de",
@@ -269,7 +292,8 @@
       "avatarText": "灰場",
       "note": "",
       "active": true,
-      "createdAt": "2026-06-02T04:59:53.759Z"
+      "createdAt": "2026-06-02T04:59:53.759Z",
+      "avatarData": ""
     },
     {
       "id": "char_6b8370d44b00",
@@ -280,7 +304,8 @@
       "avatarText": "九条",
       "note": "",
       "active": true,
-      "createdAt": "2026-06-02T04:59:53.759Z"
+      "createdAt": "2026-06-02T04:59:53.759Z",
+      "avatarData": ""
     },
     {
       "id": "char_d7e579b51b31",
@@ -291,7 +316,8 @@
       "avatarText": "枯木",
       "note": "",
       "active": true,
-      "createdAt": "2026-06-02T04:59:53.759Z"
+      "createdAt": "2026-06-02T04:59:53.759Z",
+      "avatarData": ""
     },
     {
       "id": "char_fa58e588c1f2",
@@ -302,7 +328,8 @@
       "avatarText": "莉莉",
       "note": "",
       "active": true,
-      "createdAt": "2026-06-02T04:59:53.759Z"
+      "createdAt": "2026-06-02T04:59:53.759Z",
+      "avatarData": ""
     },
     {
       "id": "char_fd1ed0f6ca3c",
@@ -313,7 +340,8 @@
       "avatarText": "笠原",
       "note": "",
       "active": true,
-      "createdAt": "2026-06-02T04:59:53.759Z"
+      "createdAt": "2026-06-02T04:59:53.759Z",
+      "avatarData": ""
     },
     {
       "id": "char_2d0c53213eb0",
@@ -324,7 +352,8 @@
       "avatarText": "鳴瀬",
       "note": "",
       "active": true,
-      "createdAt": "2026-06-02T04:59:53.759Z"
+      "createdAt": "2026-06-02T04:59:53.759Z",
+      "avatarData": ""
     },
     {
       "id": "char_7d1fc9000711",
@@ -335,7 +364,8 @@
       "avatarText": "七瀬",
       "note": "",
       "active": true,
-      "createdAt": "2026-06-02T04:59:53.759Z"
+      "createdAt": "2026-06-02T04:59:53.759Z",
+      "avatarData": ""
     },
     {
       "id": "char_dec22d6d4130",
@@ -346,7 +376,8 @@
       "avatarText": "七尾",
       "note": "",
       "active": true,
-      "createdAt": "2026-06-02T04:59:53.759Z"
+      "createdAt": "2026-06-02T04:59:53.759Z",
+      "avatarData": ""
     },
     {
       "id": "char_8df1f24c31fc",
@@ -357,7 +388,8 @@
       "avatarText": "崎宫",
       "note": "",
       "active": true,
-      "createdAt": "2026-06-02T04:59:53.759Z"
+      "createdAt": "2026-06-02T04:59:53.759Z",
+      "avatarData": ""
     },
     {
       "id": "char_ae7fa427eafa",
@@ -368,7 +400,8 @@
       "avatarText": "丘冢",
       "note": "",
       "active": true,
-      "createdAt": "2026-06-02T04:59:53.759Z"
+      "createdAt": "2026-06-02T04:59:53.759Z",
+      "avatarData": ""
     },
     {
       "id": "char_050b8404a976",
@@ -379,7 +412,8 @@
       "avatarText": "日向",
       "note": "",
       "active": true,
-      "createdAt": "2026-06-02T04:59:53.759Z"
+      "createdAt": "2026-06-02T04:59:53.759Z",
+      "avatarData": ""
     },
     {
       "id": "char_83a07a2c131d",
@@ -390,7 +424,8 @@
       "avatarText": "三渡",
       "note": "",
       "active": true,
-      "createdAt": "2026-06-02T04:59:53.754Z"
+      "createdAt": "2026-06-02T04:59:53.754Z",
+      "avatarData": ""
     },
     {
       "id": "char_d3410b36fdff",
@@ -401,7 +436,8 @@
       "avatarText": "神楽",
       "note": "",
       "active": true,
-      "createdAt": "2026-06-02T04:59:53.759Z"
+      "createdAt": "2026-06-02T04:59:53.759Z",
+      "avatarData": ""
     },
     {
       "id": "char_6968f5e02745",
@@ -412,7 +448,8 @@
       "avatarText": "霜崎",
       "note": "",
       "active": true,
-      "createdAt": "2026-06-02T04:59:53.759Z"
+      "createdAt": "2026-06-02T04:59:53.759Z",
+      "avatarData": ""
     },
     {
       "id": "char_4b9c2f3d9aa6",
@@ -423,7 +460,8 @@
       "avatarText": "桐谷",
       "note": "",
       "active": true,
-      "createdAt": "2026-06-02T04:59:53.759Z"
+      "createdAt": "2026-06-02T04:59:53.759Z",
+      "avatarData": ""
     },
     {
       "id": "char_3e584adc4544",
@@ -434,7 +472,8 @@
       "avatarText": "霧島",
       "note": "",
       "active": true,
-      "createdAt": "2026-06-02T04:59:53.759Z"
+      "createdAt": "2026-06-02T04:59:53.759Z",
+      "avatarData": ""
     },
     {
       "id": "char_d085b6132db2",
@@ -445,7 +484,8 @@
       "avatarText": "霞見",
       "note": "",
       "active": true,
-      "createdAt": "2026-06-02T04:59:53.759Z"
+      "createdAt": "2026-06-02T04:59:53.759Z",
+      "avatarData": ""
     },
     {
       "id": "char_77c350c37995",
@@ -456,7 +496,8 @@
       "avatarText": "夏目",
       "note": "",
       "active": true,
-      "createdAt": "2026-06-02T04:59:53.754Z"
+      "createdAt": "2026-06-02T04:59:53.754Z",
+      "avatarData": ""
     },
     {
       "id": "char_25ecc079362c",
@@ -467,7 +508,8 @@
       "avatarText": "星見",
       "note": "",
       "active": true,
-      "createdAt": "2026-06-02T04:59:53.759Z"
+      "createdAt": "2026-06-02T04:59:53.759Z",
+      "avatarData": ""
     },
     {
       "id": "char_f671786e0c8d",
@@ -478,7 +520,8 @@
       "avatarText": "朽木",
       "note": "",
       "active": true,
-      "createdAt": "2026-06-02T04:59:53.759Z"
+      "createdAt": "2026-06-02T04:59:53.759Z",
+      "avatarData": ""
     },
     {
       "id": "char_4c35cb23e160",
@@ -489,7 +532,8 @@
       "avatarText": "夜守",
       "note": "",
       "active": true,
-      "createdAt": "2026-06-02T04:59:53.759Z"
+      "createdAt": "2026-06-02T04:59:53.759Z",
+      "avatarData": ""
     },
     {
       "id": "char_15a9fc269208",
@@ -500,7 +544,8 @@
       "avatarText": "柚木",
       "note": "",
       "active": true,
-      "createdAt": "2026-06-02T04:59:53.759Z"
+      "createdAt": "2026-06-02T04:59:53.759Z",
+      "avatarData": ""
     },
     {
       "id": "char_061886845322",
@@ -511,7 +556,8 @@
       "avatarText": "雨宮",
       "note": "",
       "active": true,
-      "createdAt": "2026-06-02T04:59:53.759Z"
+      "createdAt": "2026-06-02T04:59:53.759Z",
+      "avatarData": ""
     },
     {
       "id": "char_1077693a53d1",
@@ -522,7 +568,8 @@
       "avatarText": "御堂",
       "note": "",
       "active": true,
-      "createdAt": "2026-06-02T04:59:53.759Z"
+      "createdAt": "2026-06-02T04:59:53.759Z",
+      "avatarData": ""
     },
     {
       "id": "char_68660d82f8b2",
@@ -533,7 +580,8 @@
       "avatarText": "月白",
       "note": "",
       "active": true,
-      "createdAt": "2026-06-02T04:59:53.759Z"
+      "createdAt": "2026-06-02T04:59:53.759Z",
+      "avatarData": ""
     },
     {
       "id": "char_ab7de5c73618",
@@ -544,7 +592,8 @@
       "avatarText": "凪原",
       "note": "",
       "active": true,
-      "createdAt": "2026-06-02T04:59:53.759Z"
+      "createdAt": "2026-06-02T04:59:53.759Z",
+      "avatarData": ""
     },
     {
       "id": "char_bc702eb75259",
@@ -555,7 +604,8 @@
       "avatarText": "柊凛",
       "note": "",
       "active": true,
-      "createdAt": "2026-06-02T04:59:53.759Z"
+      "createdAt": "2026-06-02T04:59:53.759Z",
+      "avatarData": ""
     },
     {
       "id": "char_ebf71cc17d68",
@@ -566,7 +616,8 @@
       "avatarText": "渚結",
       "note": "",
       "active": true,
-      "createdAt": "2026-06-02T04:59:53.759Z"
+      "createdAt": "2026-06-02T04:59:53.759Z",
+      "avatarData": ""
     },
     {
       "id": "char_81f97320b4bb",
@@ -577,7 +628,8 @@
       "avatarText": "椎名",
       "note": "",
       "active": true,
-      "createdAt": "2026-06-02T04:59:53.759Z"
+      "createdAt": "2026-06-02T04:59:53.759Z",
+      "avatarData": ""
     }
   ],
   "chats": [
@@ -597,7 +649,7 @@
         "char_44de2b250cad",
         "char_ebf71cc17d68"
       ],
-      "isPublic": false,
+      "isPublic": true,
       "createdAt": "2026-06-02T04:59:53.771Z"
     },
     {
@@ -656,8 +708,10 @@
       "authorId": "char_a1c230f02725",
       "content": "今晚点名前，把明天体育课要用的运动服先拿出来。别到早上再翻。",
       "gameTime": "开学首日 18:12",
-      "createdAt": "2026-06-02T04:59:53.771Z"
+      "createdAt": "2026-06-02T04:59:53.771Z",
+      "attachment": null
     }
   ],
-  "updatedAt": "2026-06-02T04:59:53.772Z"
+  "updatedAt": "2026-06-02T04:59:53.772Z",
+  "emojis": []
 }

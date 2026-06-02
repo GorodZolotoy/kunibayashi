@@ -10,6 +10,10 @@ const STATE_FILE = path.join(DATA_DIR, "state.json");
 const PORT = Number(process.env.PORT || 4173);
 const HOST = process.env.HOST || "0.0.0.0";
 const GM_PIN = process.env.GM_PIN || "gm";
+const MAX_JSON_BODY_BYTES = 8 * 1024 * 1024;
+const MAX_AVATAR_DATA_URL_LENGTH = 650000;
+const MAX_EMOJI_DATA_URL_LENGTH = 350000;
+const MAX_CHAT_IMAGE_DATA_URL_LENGTH = 2800000;
 
 const MIME = {
   ".html": "text/html; charset=utf-8",
@@ -43,7 +47,8 @@ function ensureState() {
 
 function readState() {
   ensureState();
-  return JSON.parse(fs.readFileSync(STATE_FILE, "utf8"));
+  const state = JSON.parse(fs.readFileSync(STATE_FILE, "utf8"));
+  return normalizeState(state);
 }
 
 function writeState(state) {
@@ -58,8 +63,7 @@ function createInitialState() {
   const seedState = readSeedState();
   const characters = scanVaultCharacters();
   if (!characters.length && seedState?.characters?.length) {
-    seedState.updatedAt = new Date().toISOString();
-    return seedState;
+    return normalizeState({ ...seedState, updatedAt: new Date().toISOString() });
   }
 
   const seededCharacters = characters.length ? characters : [
@@ -96,7 +100,7 @@ function createInitialState() {
         name: "1-A 放课后群",
         type: "group",
         memberIds: firstGroupMembers.length ? firstGroupMembers : everyone,
-        isPublic: false,
+        isPublic: true,
         createdAt: now
       },
       {
@@ -137,8 +141,53 @@ function createInitialState() {
         createdAt: now
       }
     ],
+    emojis: defaultEmojis(),
     updatedAt: now
   };
+}
+
+function normalizeState(state) {
+  state.version = Math.max(Number(state.version || 1), 2);
+  state.settings ||= {};
+  state.settings.gameTime ||= "开学首日 18:12";
+  state.settings.schoolDay ||= "周一";
+  state.settings.feedName ||= "Kokubayashi SNS";
+  state.settings.chatName ||= "K-LINE";
+  state.characters ||= [];
+  state.chats ||= [];
+  state.posts ||= [];
+  state.messages ||= [];
+  state.emojis ||= defaultEmojis();
+
+  for (const character of state.characters) {
+    character.avatarText ||= avatarText(character.name);
+    character.handle = `@${String(character.handle || makeHandle(character.name)).replace(/^@/, "")}`;
+    character.type ||= "npc";
+    character.active = character.active !== false;
+  }
+
+  for (const chat of state.chats) {
+    chat.memberIds = unique(chat.memberIds || []);
+    if (chat.id === "chat_1a") chat.isPublic = true;
+  }
+
+  for (const post of state.posts) {
+    post.metrics = normalizeMetrics(post.metrics);
+    post.replies ||= [];
+  }
+
+  for (const message of state.messages) {
+    if (message.imageData && !message.attachment) {
+      message.attachment = { type: "image", dataUrl: message.imageData, name: "image" };
+      delete message.imageData;
+    }
+  }
+
+  return state;
+}
+
+function defaultEmojis() {
+  return [];
 }
 
 function readSeedState() {
@@ -252,6 +301,7 @@ function makeCharacter(idValue, name, handle, type) {
     type,
     color: PALETTE[colorIndex],
     avatarText: avatarText(name),
+    avatarData: "",
     note: "",
     active: true,
     createdAt: new Date().toISOString()
@@ -294,6 +344,13 @@ function sendJson(res, status, payload) {
   res.end(body);
 }
 
+function publicState(state) {
+  return {
+    ...state,
+    characters: state.characters.map(({ accessToken, auth, ...character }) => character)
+  };
+}
+
 function sendText(res, status, body, contentType = "text/plain; charset=utf-8") {
   res.writeHead(status, {
     "Content-Type": contentType,
@@ -308,7 +365,7 @@ function readBody(req) {
     let body = "";
     req.on("data", (chunk) => {
       body += chunk;
-      if (body.length > 1024 * 1024) {
+      if (Buffer.byteLength(body) > MAX_JSON_BODY_BYTES) {
         reject(new Error("Request body is too large."));
         req.destroy();
       }
@@ -338,6 +395,67 @@ function findCharacter(state, characterId) {
   return state.characters.find((character) => character.id === characterId && character.active !== false);
 }
 
+function authorizeAuthor(req, res, state, characterId) {
+  const author = findCharacter(state, characterId);
+  if (!author) {
+    sendJson(res, 400, { error: "Author not found." });
+    return null;
+  }
+  if (isAdmin(req)) return author;
+  if (author.type !== "account") {
+    sendJson(res, 403, { error: "Players can only post from their own account." });
+    return null;
+  }
+  const token = req.headers["x-account-token"];
+  if (!token || token !== author.accessToken) {
+    sendJson(res, 403, { error: "Account token is invalid." });
+    return null;
+  }
+  return author;
+}
+
+function ensureChatAccess(req, res, chat, author) {
+  if (isAdmin(req)) return true;
+  if (chat.isPublic || chat.memberIds.includes(author.id)) return true;
+  sendJson(res, 403, { error: "This account cannot access that chat." });
+  return false;
+}
+
+function normalizeHandle(value, fallbackName) {
+  const raw = String(value || makeHandle(fallbackName)).replace(/^@/, "").trim();
+  const compact = raw || makeHandle(fallbackName);
+  return `@${compact.slice(0, 32)}`;
+}
+
+function normalizeShortcode(value) {
+  const shortcode = String(value || "").trim().replace(/^:+|:+$/g, "").toLowerCase();
+  if (!/^[a-z0-9_\-]{1,24}$/.test(shortcode)) return "";
+  return shortcode;
+}
+
+function validateDataUrl(value, maxLength, label) {
+  const dataUrl = String(value || "").trim();
+  if (!dataUrl) return "";
+  if (dataUrl.length > maxLength) {
+    throw new Error(`${label} is too large.`);
+  }
+  if (!/^data:image\/(?:png|jpe?g|webp|gif);base64,[a-z0-9+/=\r\n]+$/i.test(dataUrl)) {
+    throw new Error(`${label} must be a PNG, JPG, WebP, or GIF data URL.`);
+  }
+  return dataUrl.replace(/\s/g, "");
+}
+
+function hashPasscode(passcode, salt) {
+  return crypto.createHash("sha256").update(`${salt}:${String(passcode)}`).digest("hex");
+}
+
+function normalizePasscode(value) {
+  const passcode = String(value || "").trim();
+  if (passcode.length < 4) return "";
+  if (passcode.length > 80) return "";
+  return passcode;
+}
+
 function normalizeMetrics(metrics) {
   return {
     likes: clampInt(metrics?.likes, 0),
@@ -356,7 +474,7 @@ async function routeApi(req, res, url) {
   const state = readState();
 
   if (req.method === "GET" && url.pathname === "/api/state") {
-    sendJson(res, 200, state);
+    sendJson(res, 200, publicState(state));
     return;
   }
 
@@ -372,6 +490,138 @@ async function routeApi(req, res, url) {
   }
 
   const body = ["POST", "PATCH", "DELETE"].includes(req.method) ? await readBody(req) : {};
+
+  if (req.method === "POST" && url.pathname === "/api/player-accounts") {
+    const name = String(body.name || "").trim();
+    if (!name) return sendJson(res, 400, { error: "Account name is required." });
+    if (name.length > 40) return sendJson(res, 400, { error: "Account name is too long." });
+    const passcode = normalizePasscode(body.passcode);
+    if (!passcode) return sendJson(res, 400, { error: "Passcode must be 4 to 80 characters." });
+    const handle = normalizeHandle(body.handle, name);
+    if (state.characters.some((character) => character.handle.toLowerCase() === handle.toLowerCase())) {
+      return sendJson(res, 409, { error: "That handle is already taken." });
+    }
+
+    let avatarData = "";
+    try {
+      avatarData = validateDataUrl(body.avatarData, MAX_AVATAR_DATA_URL_LENGTH, "Avatar");
+    } catch (error) {
+      return sendJson(res, 400, { error: error.message });
+    }
+
+    const accessToken = crypto.randomBytes(24).toString("hex");
+    const salt = crypto.randomBytes(12).toString("hex");
+    const character = makeCharacter(id("acct"), name, handle, "account");
+    character.avatarData = avatarData;
+    character.accessToken = accessToken;
+    character.auth = { salt, passcodeHash: hashPasscode(passcode, salt) };
+    character.note = "Self-created player account";
+    state.characters.push(character);
+
+    for (const chat of state.chats) {
+      if (chat.isPublic && !chat.memberIds.includes(character.id)) {
+        chat.memberIds.push(character.id);
+      }
+    }
+
+    writeState(state);
+    sendJson(res, 201, {
+      state: publicState(state),
+      accountId: character.id,
+      accountToken: accessToken
+    });
+    return;
+  }
+
+  if (req.method === "POST" && url.pathname === "/api/player-accounts/login") {
+    const handle = String(body.handle || "").replace(/^@/, "").trim().toLowerCase();
+    const passcode = normalizePasscode(body.passcode);
+    if (!handle || !passcode) return sendJson(res, 400, { error: "Handle and passcode are required." });
+
+    const character = state.characters.find((item) => item.type === "account" && item.handle.replace(/^@/, "").toLowerCase() === handle);
+    if (!character?.auth?.salt || !character?.auth?.passcodeHash) {
+      return sendJson(res, 401, { error: "Account not found or cannot be recovered." });
+    }
+    if (hashPasscode(passcode, character.auth.salt) !== character.auth.passcodeHash) {
+      return sendJson(res, 401, { error: "Handle or passcode is incorrect." });
+    }
+
+    character.accessToken = crypto.randomBytes(24).toString("hex");
+    writeState(state);
+    sendJson(res, 200, {
+      state: publicState(state),
+      accountId: character.id,
+      accountToken: character.accessToken
+    });
+    return;
+  }
+
+  if (req.method === "PATCH" && url.pathname.startsWith("/api/player-accounts/")) {
+    const characterId = decodeURIComponent(url.pathname.split("/").pop());
+    const character = authorizeAuthor(req, res, state, characterId);
+    if (!character) return;
+
+    if (body.name !== undefined) {
+      const name = String(body.name || "").trim();
+      if (!name) return sendJson(res, 400, { error: "Account name is required." });
+      if (name.length > 40) return sendJson(res, 400, { error: "Account name is too long." });
+      character.name = name;
+      character.avatarText = avatarText(name);
+    }
+    if (body.handle !== undefined) {
+      const handle = normalizeHandle(body.handle, character.name);
+      if (state.characters.some((item) => item.id !== character.id && item.handle.toLowerCase() === handle.toLowerCase())) {
+        return sendJson(res, 409, { error: "That handle is already taken." });
+      }
+      character.handle = handle;
+    }
+    if (body.avatarData !== undefined) {
+      try {
+        character.avatarData = validateDataUrl(body.avatarData, MAX_AVATAR_DATA_URL_LENGTH, "Avatar");
+      } catch (error) {
+        return sendJson(res, 400, { error: error.message });
+      }
+    }
+
+    writeState(state);
+    sendJson(res, 200, publicState(state));
+    return;
+  }
+
+  if (req.method === "POST" && url.pathname === "/api/emojis") {
+    const shortcode = normalizeShortcode(body.shortcode);
+    if (!shortcode) return sendJson(res, 400, { error: "Emoji shortcode must use letters, numbers, dash, or underscore." });
+
+    let imageData = "";
+    try {
+      imageData = validateDataUrl(body.imageData, MAX_EMOJI_DATA_URL_LENGTH, "Emoji image");
+    } catch (error) {
+      return sendJson(res, 400, { error: error.message });
+    }
+    if (!imageData) return sendJson(res, 400, { error: "Emoji image is required." });
+
+    let ownerId = "";
+    if (!isAdmin(req)) {
+      const owner = authorizeAuthor(req, res, state, body.ownerId);
+      if (!owner) return;
+      ownerId = owner.id;
+    } else {
+      ownerId = body.ownerId && findCharacter(state, body.ownerId) ? body.ownerId : "";
+    }
+
+    state.emojis = state.emojis.filter((emoji) => emoji.shortcode !== shortcode);
+    state.emojis.push({
+      id: id("emoji"),
+      shortcode,
+      name: String(body.name || shortcode).trim().slice(0, 40),
+      imageData,
+      ownerId,
+      createdAt: new Date().toISOString()
+    });
+    writeState(state);
+    sendJson(res, 201, publicState(state));
+    return;
+  }
 
   if (req.method === "PATCH" && url.pathname === "/api/settings") {
     if (!requireAdmin(req, res)) return;
@@ -389,6 +639,13 @@ async function routeApi(req, res, url) {
     const name = String(body.name || "").trim();
     if (!name) return sendJson(res, 400, { error: "Character name is required." });
     const character = makeCharacter(id("char"), name, body.handle || makeHandle(name), body.type === "player" ? "player" : "npc");
+    if (body.avatarData) {
+      try {
+        character.avatarData = validateDataUrl(body.avatarData, MAX_AVATAR_DATA_URL_LENGTH, "Avatar");
+      } catch (error) {
+        return sendJson(res, 400, { error: error.message });
+      }
+    }
     character.note = String(body.note || "").trim();
     state.characters.push(character);
     writeState(state);
@@ -404,6 +661,13 @@ async function routeApi(req, res, url) {
     if (body.name !== undefined) character.name = String(body.name).trim() || character.name;
     if (body.handle !== undefined) character.handle = `@${String(body.handle).replace(/^@/, "").trim()}`;
     if (body.color !== undefined) character.color = String(body.color).trim() || character.color;
+    if (body.avatarData !== undefined) {
+      try {
+        character.avatarData = validateDataUrl(body.avatarData, MAX_AVATAR_DATA_URL_LENGTH, "Avatar");
+      } catch (error) {
+        return sendJson(res, 400, { error: error.message });
+      }
+    }
     if (body.note !== undefined) character.note = String(body.note).trim();
     if (body.active !== undefined) character.active = Boolean(body.active);
     writeState(state);
@@ -412,9 +676,9 @@ async function routeApi(req, res, url) {
   }
 
   if (req.method === "POST" && url.pathname === "/api/feed/posts") {
-    const author = findCharacter(state, body.authorId);
+    const author = authorizeAuthor(req, res, state, body.authorId);
     const content = String(body.content || "").trim();
-    if (!author) return sendJson(res, 400, { error: "Author not found." });
+    if (!author) return;
     if (!content) return sendJson(res, 400, { error: "Post content is required." });
     state.posts.push({
       id: id("post"),
@@ -445,9 +709,9 @@ async function routeApi(req, res, url) {
     }
 
     if (req.method === "POST" && action === "replies") {
-      const author = findCharacter(state, body.authorId);
+      const author = authorizeAuthor(req, res, state, body.authorId);
       const content = String(body.content || "").trim();
-      if (!author) return sendJson(res, 400, { error: "Author not found." });
+      if (!author) return;
       if (!content) return sendJson(res, 400, { error: "Reply content is required." });
       post.replies.push({
         id: id("reply"),
@@ -513,17 +777,33 @@ async function routeApi(req, res, url) {
   }
 
   if (req.method === "POST" && url.pathname === "/api/messages") {
-    const author = findCharacter(state, body.authorId);
+    const author = authorizeAuthor(req, res, state, body.authorId);
     const chat = state.chats.find((item) => item.id === body.chatId);
     const content = String(body.content || "").trim();
-    if (!author) return sendJson(res, 400, { error: "Author not found." });
+    if (!author) return;
     if (!chat) return sendJson(res, 400, { error: "Chat not found." });
-    if (!content) return sendJson(res, 400, { error: "Message content is required." });
+    if (!ensureChatAccess(req, res, chat, author)) return;
+
+    let attachment = null;
+    if (body.attachment?.dataUrl) {
+      try {
+        attachment = {
+          type: "image",
+          dataUrl: validateDataUrl(body.attachment.dataUrl, MAX_CHAT_IMAGE_DATA_URL_LENGTH, "Chat image"),
+          name: String(body.attachment.name || "image").trim().slice(0, 80)
+        };
+      } catch (error) {
+        return sendJson(res, 400, { error: error.message });
+      }
+    }
+
+    if (!content && !attachment) return sendJson(res, 400, { error: "Message content or image is required." });
     state.messages.push({
       id: id("msg"),
       chatId: chat.id,
       authorId: author.id,
       content,
+      attachment,
       gameTime: String(body.gameTime || state.settings.gameTime).trim(),
       createdAt: new Date().toISOString()
     });
@@ -595,6 +875,9 @@ function exportMarkdown(state) {
     for (const message of messages) {
       const author = byId.get(message.authorId);
       lines.push(`- ${message.gameTime} | ${author?.name || "Unknown"}：${message.content}`);
+      if (message.attachment?.type === "image") {
+        lines.push(`  - [图片] ${message.attachment.name || "image"}`);
+      }
     }
     lines.push("");
   }
