@@ -1,0 +1,55 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>国林 SNS / K-LINE</title>
+    <link rel="stylesheet" href="/styles.css">
+  </head>
+  <body>
+    <div id="app" class="app-shell">
+      <aside class="side-panel">
+        <div class="brand-row">
+          <div class="brand-mark">K</div>
+          <div>
+            <div class="brand-title">国林 SNS</div>
+            <div id="brand-subtitle" class="brand-subtitle">K-LINE</div>
+          </div>
+        </div>
+
+        <nav class="main-nav" aria-label="主导航">
+          <button class="nav-button active" type="button" data-tab="feed">时间线</button>
+          <button class="nav-button" type="button" data-tab="chats">聊天</button>
+          <button class="nav-button" type="button" data-tab="gm">GM</button>
+        </nav>
+
+        <section class="identity-panel" aria-label="身份">
+          <label for="actor-select">当前身份</label>
+          <select id="actor-select"></select>
+          <div id="actor-preview" class="actor-preview"></div>
+        </section>
+      </aside>
+
+      <main class="workspace">
+        <header class="top-bar">
+          <div>
+            <div id="view-title" class="view-title">时间线</div>
+            <div id="clock-line" class="clock-line"></div>
+          </div>
+          <div id="gm-badge" class="gm-badge">玩家模式</div>
+        </header>
+
+        <div id="notice" class="notice" hidden></div>
+        <div id="view-root" class="view-root"></div>
+      </main>
+
+      <nav class="bottom-nav" aria-label="底部导航">
+        <button class="bottom-button active" type="button" data-tab="feed">时间线</button>
+        <button class="bottom-button" type="button" data-tab="chats">聊天</button>
+        <button class="bottom-button" type="button" data-tab="gm">GM</button>
+      </nav>
+    </div>
+
+    <script src="/app.js"></script>
+  </body>
+</html>

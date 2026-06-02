@@ -1,0 +1,4 @@
+data/state.json
+server.out.log
+server.err.log
+.tmp-*/

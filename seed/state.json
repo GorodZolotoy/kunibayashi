@@ -1,0 +1,663 @@
+{
+  "version": 1,
+  "settings": {
+    "gameTime": "开学首日 18:12",
+    "schoolDay": "周一",
+    "feedName": "Kokubayashi SNS",
+    "chatName": "K-LINE"
+  },
+  "characters": [
+    {
+      "id": "char_1b8f4a5e5073",
+      "name": "三渡 七海",
+      "handle": "@三渡七海",
+      "type": "player",
+      "color": "#8a6f3f",
+      "avatarText": "三渡",
+      "note": "",
+      "active": true,
+      "createdAt": "2026-06-02T04:59:53.752Z"
+    },
+    {
+      "id": "char_1f7b4db4d25a",
+      "name": "霜月神久",
+      "handle": "@霜月神久",
+      "type": "player",
+      "color": "#9a6b3a",
+      "avatarText": "霜月",
+      "note": "",
+      "active": true,
+      "createdAt": "2026-06-02T04:59:53.754Z"
+    },
+    {
+      "id": "char_896c56e25e8e",
+      "name": "水無月 有栖 (みなづき ありす)",
+      "handle": "@水無月有栖みなづきありす",
+      "type": "player",
+      "color": "#b44c43",
+      "avatarText": "水無",
+      "note": "",
+      "active": true,
+      "createdAt": "2026-06-02T04:59:53.753Z"
+    },
+    {
+      "id": "char_e429200a38a8",
+      "name": "藤原 瀬央",
+      "handle": "@藤原瀬央",
+      "type": "player",
+      "color": "#6f7f51",
+      "avatarText": "藤原",
+      "note": "",
+      "active": true,
+      "createdAt": "2026-06-02T04:59:53.754Z"
+    },
+    {
+      "id": "char_d1e113442462",
+      "name": "五十岚秋人 (Igarashi Akito)",
+      "handle": "@五十岚秋人IgarashiAkito",
+      "type": "player",
+      "color": "#b44c43",
+      "avatarText": "五十",
+      "note": "",
+      "active": true,
+      "createdAt": "2026-06-02T04:59:53.753Z"
+    },
+    {
+      "id": "char_9d085ddd2602",
+      "name": "伊万·伊万诺维奇·伊万诺夫/小泉真弥",
+      "handle": "@伊万伊万诺维奇伊万诺夫小泉真弥",
+      "type": "player",
+      "color": "#8b5a65",
+      "avatarText": "伊万",
+      "note": "",
+      "active": true,
+      "createdAt": "2026-06-02T04:59:53.753Z"
+    },
+    {
+      "id": "char_a1c230f02725",
+      "name": "安娜斯塔西娅·德米特里耶芙娜·白鷺",
+      "handle": "@安娜斯塔西娅德米特里耶芙娜白鷺",
+      "type": "npc",
+      "color": "#b44c43",
+      "avatarText": "安娜",
+      "note": "",
+      "active": true,
+      "createdAt": "2026-06-02T04:59:53.759Z"
+    },
+    {
+      "id": "char_98e7b1d85601",
+      "name": "白瀬 透",
+      "handle": "@白瀬透",
+      "type": "npc",
+      "color": "#2b6f6a",
+      "avatarText": "白瀬",
+      "note": "",
+      "active": true,
+      "createdAt": "2026-06-02T04:59:53.759Z"
+    },
+    {
+      "id": "char_738bee39d9c8",
+      "name": "白鳥 ルイーゼ",
+      "handle": "@白鳥ルイーゼ",
+      "type": "npc",
+      "color": "#8a6f3f",
+      "avatarText": "白鳥",
+      "note": "",
+      "active": true,
+      "createdAt": "2026-06-02T04:59:53.759Z"
+    },
+    {
+      "id": "char_58c687c3e1c9",
+      "name": "白崎 律",
+      "handle": "@白崎律",
+      "type": "npc",
+      "color": "#2b6f6a",
+      "avatarText": "白崎",
+      "note": "",
+      "active": true,
+      "createdAt": "2026-06-02T04:59:53.759Z"
+    },
+    {
+      "id": "char_fdc09f5ad247",
+      "name": "白星·索菲亚",
+      "handle": "@白星索菲亚",
+      "type": "npc",
+      "color": "#8b5a65",
+      "avatarText": "白星",
+      "note": "",
+      "active": true,
+      "createdAt": "2026-06-02T04:59:53.759Z"
+    },
+    {
+      "id": "char_9afdd865df24",
+      "name": "北原和音",
+      "handle": "@北原和音",
+      "type": "npc",
+      "color": "#4f6d7a",
+      "avatarText": "北原",
+      "note": "",
+      "active": true,
+      "createdAt": "2026-06-02T04:59:53.759Z"
+    },
+    {
+      "id": "char_861c71a930c2",
+      "name": "氷上氷華",
+      "handle": "@氷上氷華",
+      "type": "npc",
+      "color": "#3f7a99",
+      "avatarText": "氷上",
+      "note": "",
+      "active": true,
+      "createdAt": "2026-06-02T04:59:53.759Z"
+    },
+    {
+      "id": "char_4abbee6c9acd",
+      "name": "氷室 清花",
+      "handle": "@氷室清花",
+      "type": "npc",
+      "color": "#4f6d7a",
+      "avatarText": "氷室",
+      "note": "",
+      "active": true,
+      "createdAt": "2026-06-02T04:59:53.759Z"
+    },
+    {
+      "id": "char_58e32fe5627c",
+      "name": "赤城 大和",
+      "handle": "@赤城大和",
+      "type": "npc",
+      "color": "#2b6f6a",
+      "avatarText": "赤城",
+      "note": "",
+      "active": true,
+      "createdAt": "2026-06-02T04:59:53.759Z"
+    },
+    {
+      "id": "char_428c2d476d19",
+      "name": "春野 䌷",
+      "handle": "@春野䌷",
+      "type": "npc",
+      "color": "#4f6d7a",
+      "avatarText": "春野",
+      "note": "",
+      "active": true,
+      "createdAt": "2026-06-02T04:59:53.759Z"
+    },
+    {
+      "id": "char_ecb4f3ecacc3",
+      "name": "崔 星夜",
+      "handle": "@崔星夜",
+      "type": "npc",
+      "color": "#6f7f51",
+      "avatarText": "崔星",
+      "note": "",
+      "active": true,
+      "createdAt": "2026-06-02T04:59:53.759Z"
+    },
+    {
+      "id": "char_a17a17dd4965",
+      "name": "冬马一恋",
+      "handle": "@冬马一恋",
+      "type": "npc",
+      "color": "#b44c43",
+      "avatarText": "冬马",
+      "note": "",
+      "active": true,
+      "createdAt": "2026-06-02T04:59:53.759Z"
+    },
+    {
+      "id": "char_e08c778d62a2",
+      "name": "逢坂 湊",
+      "handle": "@逢坂湊",
+      "type": "npc",
+      "color": "#2b6f6a",
+      "avatarText": "逢坂",
+      "note": "",
+      "active": true,
+      "createdAt": "2026-06-02T04:59:53.759Z"
+    },
+    {
+      "id": "char_44cb00da3a41",
+      "name": "高濑希",
+      "handle": "@高濑希",
+      "type": "npc",
+      "color": "#6f7f51",
+      "avatarText": "高濑",
+      "note": "",
+      "active": true,
+      "createdAt": "2026-06-02T04:59:53.755Z"
+    },
+    {
+      "id": "char_33d1b33a4054",
+      "name": "黑川莲司",
+      "handle": "@黑川莲司",
+      "type": "npc",
+      "color": "#8a6f3f",
+      "avatarText": "黑川",
+      "note": "",
+      "active": true,
+      "createdAt": "2026-06-02T04:59:53.755Z"
+    },
+    {
+      "id": "char_e9bcd6de503e",
+      "name": "花菱詠葉",
+      "handle": "@花菱詠葉",
+      "type": "npc",
+      "color": "#b44c43",
+      "avatarText": "花菱",
+      "note": "",
+      "active": true,
+      "createdAt": "2026-06-02T04:59:53.759Z"
+    },
+    {
+      "id": "char_44de2b250cad",
+      "name": "花园千绘",
+      "handle": "@花园千绘",
+      "type": "npc",
+      "color": "#6f7f51",
+      "avatarText": "花园",
+      "note": "",
+      "active": true,
+      "createdAt": "2026-06-02T04:59:53.755Z"
+    },
+    {
+      "id": "char_4b17130328de",
+      "name": "灰場 遥人",
+      "handle": "@灰場遥人",
+      "type": "npc",
+      "color": "#8a6f3f",
+      "avatarText": "灰場",
+      "note": "",
+      "active": true,
+      "createdAt": "2026-06-02T04:59:53.759Z"
+    },
+    {
+      "id": "char_6b8370d44b00",
+      "name": "九条 蒼",
+      "handle": "@九条蒼",
+      "type": "npc",
+      "color": "#8a6f3f",
+      "avatarText": "九条",
+      "note": "",
+      "active": true,
+      "createdAt": "2026-06-02T04:59:53.759Z"
+    },
+    {
+      "id": "char_d7e579b51b31",
+      "name": "枯木 蓮一",
+      "handle": "@枯木蓮一",
+      "type": "npc",
+      "color": "#9a6b3a",
+      "avatarText": "枯木",
+      "note": "",
+      "active": true,
+      "createdAt": "2026-06-02T04:59:53.759Z"
+    },
+    {
+      "id": "char_fa58e588c1f2",
+      "name": "莉莉娅·德米特里耶芙娜·白鷺",
+      "handle": "@莉莉娅德米特里耶芙娜白鷺",
+      "type": "npc",
+      "color": "#4f6d7a",
+      "avatarText": "莉莉",
+      "note": "",
+      "active": true,
+      "createdAt": "2026-06-02T04:59:53.759Z"
+    },
+    {
+      "id": "char_fd1ed0f6ca3c",
+      "name": "笠原温人",
+      "handle": "@笠原温人",
+      "type": "npc",
+      "color": "#8b5a65",
+      "avatarText": "笠原",
+      "note": "",
+      "active": true,
+      "createdAt": "2026-06-02T04:59:53.759Z"
+    },
+    {
+      "id": "char_2d0c53213eb0",
+      "name": "鳴瀬 空",
+      "handle": "@鳴瀬空",
+      "type": "npc",
+      "color": "#8b5a65",
+      "avatarText": "鳴瀬",
+      "note": "",
+      "active": true,
+      "createdAt": "2026-06-02T04:59:53.759Z"
+    },
+    {
+      "id": "char_7d1fc9000711",
+      "name": "七瀬 日和",
+      "handle": "@七瀬日和",
+      "type": "npc",
+      "color": "#8b5a65",
+      "avatarText": "七瀬",
+      "note": "",
+      "active": true,
+      "createdAt": "2026-06-02T04:59:53.759Z"
+    },
+    {
+      "id": "char_dec22d6d4130",
+      "name": "七尾 芹奈",
+      "handle": "@七尾芹奈",
+      "type": "npc",
+      "color": "#3f7a99",
+      "avatarText": "七尾",
+      "note": "",
+      "active": true,
+      "createdAt": "2026-06-02T04:59:53.759Z"
+    },
+    {
+      "id": "char_8df1f24c31fc",
+      "name": "崎宫 狂澜",
+      "handle": "@崎宫狂澜",
+      "type": "npc",
+      "color": "#8b5a65",
+      "avatarText": "崎宫",
+      "note": "",
+      "active": true,
+      "createdAt": "2026-06-02T04:59:53.759Z"
+    },
+    {
+      "id": "char_ae7fa427eafa",
+      "name": "丘冢 梢",
+      "handle": "@丘冢梢",
+      "type": "npc",
+      "color": "#3f7a99",
+      "avatarText": "丘冢",
+      "note": "",
+      "active": true,
+      "createdAt": "2026-06-02T04:59:53.759Z"
+    },
+    {
+      "id": "char_050b8404a976",
+      "name": "日向 鈴",
+      "handle": "@日向鈴",
+      "type": "npc",
+      "color": "#8b5a65",
+      "avatarText": "日向",
+      "note": "",
+      "active": true,
+      "createdAt": "2026-06-02T04:59:53.759Z"
+    },
+    {
+      "id": "char_83a07a2c131d",
+      "name": "三渡 隼人",
+      "handle": "@三渡隼人",
+      "type": "npc",
+      "color": "#8a6f3f",
+      "avatarText": "三渡",
+      "note": "",
+      "active": true,
+      "createdAt": "2026-06-02T04:59:53.754Z"
+    },
+    {
+      "id": "char_d3410b36fdff",
+      "name": "神楽坂 雪乃",
+      "handle": "@神楽坂雪乃",
+      "type": "npc",
+      "color": "#8a6f3f",
+      "avatarText": "神楽",
+      "note": "",
+      "active": true,
+      "createdAt": "2026-06-02T04:59:53.759Z"
+    },
+    {
+      "id": "char_6968f5e02745",
+      "name": "霜崎 律音",
+      "handle": "@霜崎律音",
+      "type": "npc",
+      "color": "#b44c43",
+      "avatarText": "霜崎",
+      "note": "",
+      "active": true,
+      "createdAt": "2026-06-02T04:59:53.759Z"
+    },
+    {
+      "id": "char_4b9c2f3d9aa6",
+      "name": "桐谷 朔夜",
+      "handle": "@桐谷朔夜",
+      "type": "npc",
+      "color": "#8a6f3f",
+      "avatarText": "桐谷",
+      "note": "",
+      "active": true,
+      "createdAt": "2026-06-02T04:59:53.759Z"
+    },
+    {
+      "id": "char_3e584adc4544",
+      "name": "霧島 蓮",
+      "handle": "@霧島蓮",
+      "type": "npc",
+      "color": "#3f7a99",
+      "avatarText": "霧島",
+      "note": "",
+      "active": true,
+      "createdAt": "2026-06-02T04:59:53.759Z"
+    },
+    {
+      "id": "char_d085b6132db2",
+      "name": "霞見 紬",
+      "handle": "@霞見紬",
+      "type": "npc",
+      "color": "#2b6f6a",
+      "avatarText": "霞見",
+      "note": "",
+      "active": true,
+      "createdAt": "2026-06-02T04:59:53.759Z"
+    },
+    {
+      "id": "char_77c350c37995",
+      "name": "夏目奈纺",
+      "handle": "@夏目奈纺",
+      "type": "npc",
+      "color": "#9a6b3a",
+      "avatarText": "夏目",
+      "note": "",
+      "active": true,
+      "createdAt": "2026-06-02T04:59:53.754Z"
+    },
+    {
+      "id": "char_25ecc079362c",
+      "name": "星見灯里",
+      "handle": "@星見灯里",
+      "type": "npc",
+      "color": "#8b5a65",
+      "avatarText": "星見",
+      "note": "",
+      "active": true,
+      "createdAt": "2026-06-02T04:59:53.759Z"
+    },
+    {
+      "id": "char_f671786e0c8d",
+      "name": "朽木 紫苑",
+      "handle": "@朽木紫苑",
+      "type": "npc",
+      "color": "#3f7a99",
+      "avatarText": "朽木",
+      "note": "",
+      "active": true,
+      "createdAt": "2026-06-02T04:59:53.759Z"
+    },
+    {
+      "id": "char_4c35cb23e160",
+      "name": "夜守 灯真",
+      "handle": "@夜守灯真",
+      "type": "npc",
+      "color": "#6f7f51",
+      "avatarText": "夜守",
+      "note": "",
+      "active": true,
+      "createdAt": "2026-06-02T04:59:53.759Z"
+    },
+    {
+      "id": "char_15a9fc269208",
+      "name": "柚木真奈",
+      "handle": "@柚木真奈",
+      "type": "npc",
+      "color": "#8b5a65",
+      "avatarText": "柚木",
+      "note": "",
+      "active": true,
+      "createdAt": "2026-06-02T04:59:53.759Z"
+    },
+    {
+      "id": "char_061886845322",
+      "name": "雨宮 綾",
+      "handle": "@雨宮綾",
+      "type": "npc",
+      "color": "#3f7a99",
+      "avatarText": "雨宮",
+      "note": "",
+      "active": true,
+      "createdAt": "2026-06-02T04:59:53.759Z"
+    },
+    {
+      "id": "char_1077693a53d1",
+      "name": "御堂 奏真",
+      "handle": "@御堂奏真",
+      "type": "npc",
+      "color": "#2b6f6a",
+      "avatarText": "御堂",
+      "note": "",
+      "active": true,
+      "createdAt": "2026-06-02T04:59:53.759Z"
+    },
+    {
+      "id": "char_68660d82f8b2",
+      "name": "月白 凪",
+      "handle": "@月白凪",
+      "type": "npc",
+      "color": "#2b6f6a",
+      "avatarText": "月白",
+      "note": "",
+      "active": true,
+      "createdAt": "2026-06-02T04:59:53.759Z"
+    },
+    {
+      "id": "char_ab7de5c73618",
+      "name": "凪原 大河",
+      "handle": "@凪原大河",
+      "type": "npc",
+      "color": "#8a6f3f",
+      "avatarText": "凪原",
+      "note": "",
+      "active": true,
+      "createdAt": "2026-06-02T04:59:53.759Z"
+    },
+    {
+      "id": "char_bc702eb75259",
+      "name": "柊 凛太朗",
+      "handle": "@柊凛太朗",
+      "type": "npc",
+      "color": "#6f7f51",
+      "avatarText": "柊凛",
+      "note": "",
+      "active": true,
+      "createdAt": "2026-06-02T04:59:53.759Z"
+    },
+    {
+      "id": "char_ebf71cc17d68",
+      "name": "渚 結菜",
+      "handle": "@渚結菜",
+      "type": "npc",
+      "color": "#8a6f3f",
+      "avatarText": "渚結",
+      "note": "",
+      "active": true,
+      "createdAt": "2026-06-02T04:59:53.759Z"
+    },
+    {
+      "id": "char_81f97320b4bb",
+      "name": "椎名 陽菜",
+      "handle": "@椎名陽菜",
+      "type": "npc",
+      "color": "#b44c43",
+      "avatarText": "椎名",
+      "note": "",
+      "active": true,
+      "createdAt": "2026-06-02T04:59:53.759Z"
+    }
+  ],
+  "chats": [
+    {
+      "id": "chat_1a",
+      "name": "1-A 放课后群",
+      "type": "group",
+      "memberIds": [
+        "char_1b8f4a5e5073",
+        "char_1f7b4db4d25a",
+        "char_896c56e25e8e",
+        "char_e429200a38a8",
+        "char_d1e113442462",
+        "char_9d085ddd2602",
+        "char_e08c778d62a2",
+        "char_33d1b33a4054",
+        "char_44de2b250cad",
+        "char_ebf71cc17d68"
+      ],
+      "isPublic": false,
+      "createdAt": "2026-06-02T04:59:53.771Z"
+    },
+    {
+      "id": "chat_dorm",
+      "name": "寮内闲聊",
+      "type": "group",
+      "memberIds": [
+        "char_1b8f4a5e5073",
+        "char_1f7b4db4d25a",
+        "char_896c56e25e8e",
+        "char_e429200a38a8",
+        "char_d1e113442462",
+        "char_9d085ddd2602",
+        "char_a1c230f02725",
+        "char_98e7b1d85601",
+        "char_738bee39d9c8",
+        "char_58c687c3e1c9",
+        "char_fdc09f5ad247",
+        "char_9afdd865df24",
+        "char_861c71a930c2",
+        "char_4abbee6c9acd",
+        "char_58e32fe5627c",
+        "char_428c2d476d19"
+      ],
+      "isPublic": false,
+      "createdAt": "2026-06-02T04:59:53.771Z"
+    }
+  ],
+  "posts": [
+    {
+      "id": "post_mpw64xez_79ccd7de",
+      "authorId": "char_a1c230f02725",
+      "content": "放课后の山道、風が少し冷たい。購買前の自販機だけまだ明るい。",
+      "gameTime": "开学首日 18:04",
+      "createdAt": "2026-06-02T04:59:53.771Z",
+      "metrics": {
+        "likes": 17,
+        "reposts": 2,
+        "views": 86
+      },
+      "replies": [
+        {
+          "id": "reply_mpw64xf0_8a7d5d7b",
+          "authorId": "char_1b8f4a5e5073",
+          "content": "自动贩卖机这时候还有热饮吗？",
+          "gameTime": "开学首日 18:06",
+          "createdAt": "2026-06-02T04:59:53.771Z"
+        }
+      ]
+    }
+  ],
+  "messages": [
+    {
+      "id": "msg_mpw64xf0_0f6d17ce",
+      "chatId": "chat_1a",
+      "authorId": "char_a1c230f02725",
+      "content": "今晚点名前，把明天体育课要用的运动服先拿出来。别到早上再翻。",
+      "gameTime": "开学首日 18:12",
+      "createdAt": "2026-06-02T04:59:53.771Z"
+    }
+  ],
+  "updatedAt": "2026-06-02T04:59:53.772Z"
+}
