@@ -3,6 +3,8 @@ const stateBag = {
   tab: localStorage.getItem("kokubayashi.tab") || "feed",
   actorId: localStorage.getItem("kokubayashi.actorId") || "",
   activeChatId: localStorage.getItem("kokubayashi.chatId") || "",
+  selectedCalendarDayId: localStorage.getItem("kokubayashi.calendarDayId") || "",
+  gmScheduleDayId: localStorage.getItem("kokubayashi.gmScheduleDayId") || "",
   profileId: "",
   privateChatOpen: false,
   gmPin: localStorage.getItem("kokubayashi.gmPin") || "",
@@ -25,6 +27,7 @@ const els = {
 const tabNames = {
   feed: "时间线",
   chats: "聊天",
+  calendar: "校历",
   gm: "GM"
 };
 
@@ -66,6 +69,11 @@ function bindGlobalEvents() {
       const hint = document.getElementById(`${event.target.id}-hint`);
       if (hint) hint.textContent = event.target.files?.[0]?.name || imageHints[event.target.id];
     }
+    if (event.target?.id === "gm-schedule-day") {
+      stateBag.gmScheduleDayId = event.target.value;
+      localStorage.setItem("kokubayashi.gmScheduleDayId", stateBag.gmScheduleDayId);
+      renderGm();
+    }
   });
 
   els.actorSelect.addEventListener("change", () => {
@@ -84,6 +92,9 @@ async function handleAction(target) {
   if (action === "delete-post") return deletePost(target.dataset.postId);
   if (action === "select-chat") return selectChat(target.dataset.chatId);
   if (action === "send-message") return sendMessage();
+  if (action === "select-calendar-day") return selectCalendarDay(target.dataset.dayId);
+  if (action === "save-current-calendar-day") return saveCurrentCalendarDay();
+  if (action === "save-calendar-schedule") return saveCalendarSchedule();
   if (action === "unlock-gm") return unlockGm();
   if (action === "lock-gm") return lockGm();
   if (action === "save-settings") return saveSettings();
@@ -150,6 +161,7 @@ function render() {
   renderShell();
   if (stateBag.tab === "feed") renderFeed();
   if (stateBag.tab === "chats") renderChats();
+  if (stateBag.tab === "calendar") renderCalendar();
   if (stateBag.tab === "gm") renderGm();
   renderProfileOverlay();
 }
@@ -179,7 +191,10 @@ function hasDraftText() {
     "#account-passcode",
     "#login-handle",
     "#login-passcode",
-    "#emoji-shortcode"
+    "#emoji-shortcode",
+    "#calendar-date-label",
+    "#calendar-note",
+    "#calendar-schedule-text"
   ].join(",");
   return Array.from(document.querySelectorAll(draftSelector))
     .some((element) => String(element.value || "").trim());
@@ -400,6 +415,48 @@ function renderMessage(message) {
   `;
 }
 
+function renderCalendar() {
+  const days = calendarDays();
+  const selected = selectedCalendarDay();
+  els.viewRoot.innerHTML = `
+    <div class="calendar-layout">
+      <section class="calendar-days" aria-label="校历">
+        ${days.map((day) => `
+          <button class="calendar-day ${day.id === selected?.id ? "selected" : ""} ${day.id === stateBag.data.settings.currentDayId ? "current" : ""}" type="button" data-action="select-calendar-day" data-day-id="${day.id}">
+            <span class="day-label">${escapeHtml(day.label)}</span>
+            <span class="day-date">${escapeHtml(day.dateLabel || "")}</span>
+            <span class="day-count">${(day.schedule || []).length} 节</span>
+          </button>
+        `).join("")}
+      </section>
+      <section class="schedule-panel">
+        <header class="schedule-header">
+          <div>
+            <div class="section-title">${escapeHtml(selected?.label || "校历")}</div>
+            <div class="meta">${escapeHtml(selected?.dateLabel || "")}${selected?.id === stateBag.data.settings.currentDayId ? " · 当前日" : ""}</div>
+          </div>
+        </header>
+        ${selected?.note ? `<div class="schedule-note">${escapeHtml(selected.note)}</div>` : ""}
+        <div class="schedule-list">
+          ${(selected?.schedule || []).map(renderScheduleItem).join("") || `<div class="hint">这一天还没有课程。</div>`}
+        </div>
+      </section>
+    </div>
+  `;
+}
+
+function renderScheduleItem(item) {
+  return `
+    <div class="schedule-item">
+      <div class="schedule-time">${escapeHtml(item.time || "—")}</div>
+      <div class="schedule-body">
+        <div class="schedule-subject">${escapeHtml(item.subject || "未命名课程")}</div>
+        <div class="meta">${[item.location, item.note].filter(Boolean).map(escapeHtml).join(" · ")}</div>
+      </div>
+    </div>
+  `;
+}
+
 function renderProfileOverlay() {
   if (!stateBag.profileId) return;
   const profile = getActor(stateBag.profileId);
@@ -550,6 +607,8 @@ function renderGm() {
 
   const chars = stateBag.data.characters.filter((item) => item.active !== false);
   const pendingFollows = (stateBag.data.relationships || []).filter((item) => item.status === "pending");
+  const days = calendarDays();
+  const gmDay = getCalendarDay(stateBag.gmScheduleDayId) || currentCalendarDay() || days[0];
   els.viewRoot.innerHTML = `
     <div class="gm-grid">
       <section>
@@ -564,6 +623,29 @@ function renderGm() {
             <button class="ghost-button" type="button" data-action="lock-gm">锁定 GM</button>
           </div>
           <a class="secondary-button export-link" href="/api/export.md" target="_blank" rel="noreferrer">导出 Markdown</a>
+        </div>
+      </section>
+
+      <section>
+        <div class="section-title">校历 / 课程表</div>
+        <div class="form-grid">
+          <label>当前日
+            <select id="gm-current-day">
+              ${days.map((day) => `<option value="${day.id}" ${day.id === stateBag.data.settings.currentDayId ? "selected" : ""}>${escapeHtml(day.label)} ${escapeHtml(day.dateLabel || "")}</option>`).join("")}
+            </select>
+          </label>
+          <button class="primary-button" type="button" data-action="save-current-calendar-day">设为当前日</button>
+          <label>编辑日程
+            <select id="gm-schedule-day">
+              ${days.map((day) => `<option value="${day.id}" ${day.id === gmDay?.id ? "selected" : ""}>${escapeHtml(day.label)} ${escapeHtml(day.dateLabel || "")}</option>`).join("")}
+            </select>
+          </label>
+          <div class="two-col">
+            <label>日期标签 <input id="calendar-date-label" value="${escapeAttr(gmDay?.dateLabel || "")}"></label>
+            <label>备注 <input id="calendar-note" value="${escapeAttr(gmDay?.note || "")}"></label>
+          </div>
+          <textarea id="calendar-schedule-text" class="schedule-editor" placeholder="08:20 | 朝会 | 1-A 教室 | 出席确认">${escapeHtml(scheduleToText(gmDay?.schedule || []))}</textarea>
+          <button class="primary-button" type="button" data-action="save-calendar-schedule">保存课程表</button>
         </div>
       </section>
 
@@ -694,6 +776,13 @@ function selectChat(chatId) {
   renderChats();
 }
 
+function selectCalendarDay(dayId) {
+  if (!getCalendarDay(dayId)) return;
+  stateBag.selectedCalendarDayId = dayId;
+  localStorage.setItem("kokubayashi.calendarDayId", dayId);
+  renderCalendar();
+}
+
 async function sendMessage() {
   if (!currentActor()) return showNotice("请先创建或选择玩家账号。");
   const textarea = document.getElementById("message-content");
@@ -751,6 +840,42 @@ async function saveSettings() {
   });
   showNotice("时间已更新。");
   await refresh(true);
+}
+
+async function saveCurrentCalendarDay() {
+  const dayId = document.getElementById("gm-current-day")?.value;
+  if (!dayId) return showNotice("请选择当前日。");
+  stateBag.data = await api("/api/calendar/current", {
+    method: "PATCH",
+    admin: true,
+    body: { dayId }
+  });
+  stateBag.selectedCalendarDayId = dayId;
+  stateBag.gmScheduleDayId = dayId;
+  localStorage.setItem("kokubayashi.calendarDayId", dayId);
+  localStorage.setItem("kokubayashi.gmScheduleDayId", dayId);
+  showNotice("当前日已更新。");
+  render();
+}
+
+async function saveCalendarSchedule() {
+  const dayId = document.getElementById("gm-schedule-day")?.value;
+  if (!dayId) return showNotice("请选择要编辑的日期。");
+  stateBag.data = await api(`/api/calendar/days/${encodeURIComponent(dayId)}`, {
+    method: "PATCH",
+    admin: true,
+    body: {
+      dateLabel: document.getElementById("calendar-date-label")?.value,
+      note: document.getElementById("calendar-note")?.value,
+      scheduleText: document.getElementById("calendar-schedule-text")?.value
+    }
+  });
+  stateBag.selectedCalendarDayId = dayId;
+  stateBag.gmScheduleDayId = dayId;
+  localStorage.setItem("kokubayashi.calendarDayId", dayId);
+  localStorage.setItem("kokubayashi.gmScheduleDayId", dayId);
+  showNotice("课程表已保存。");
+  render();
 }
 
 async function createCharacter() {
@@ -976,6 +1101,38 @@ function contactCandidates() {
   if (!actor) return [];
   return (stateBag.data?.characters || [])
     .filter((character) => character.active !== false && character.id !== actor.id);
+}
+
+function calendarDays() {
+  return stateBag.data?.calendarDays || [];
+}
+
+function getCalendarDay(dayId) {
+  return calendarDays().find((day) => day.id === dayId);
+}
+
+function currentCalendarDay() {
+  return getCalendarDay(stateBag.data?.settings?.currentDayId) || calendarDays()[0];
+}
+
+function selectedCalendarDay() {
+  const selected = getCalendarDay(stateBag.selectedCalendarDayId);
+  const current = currentCalendarDay();
+  const next = selected || current || calendarDays()[0];
+  if (next?.id && stateBag.selectedCalendarDayId !== next.id) {
+    stateBag.selectedCalendarDayId = next.id;
+    localStorage.setItem("kokubayashi.calendarDayId", next.id);
+  }
+  return next;
+}
+
+function scheduleToText(schedule) {
+  return (schedule || []).map((item) => [
+    item.time || "",
+    item.subject || "",
+    item.location || "",
+    item.note || ""
+  ].join(" | ").replace(/(?:\s*\|\s*)+$/g, "")).join("\n");
 }
 
 function acceptedContacts() {

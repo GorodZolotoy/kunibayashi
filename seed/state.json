@@ -1,10 +1,11 @@
 {
-  "version": 3,
+  "version": 4,
   "settings": {
     "gameTime": "开学首日 18:12",
-    "schoolDay": "周一",
+    "schoolDay": "??",
     "feedName": "Kokubayashi SNS",
-    "chatName": "K-LINE"
+    "chatName": "K-LINE",
+    "currentDayId": "day_mon"
   },
   "characters": [
     {
@@ -716,5 +717,329 @@
   ],
   "updatedAt": "2026-06-02T04:59:53.772Z",
   "emojis": [],
-  "relationships": []
+  "relationships": [],
+  "calendarDays": [
+    {
+      "id": "day_mon",
+      "label": "??",
+      "dateLabel": "????",
+      "note": "",
+      "schedule": [
+        {
+          "id": "day_mon_1",
+          "time": "08:20",
+          "subject": "??",
+          "location": "1-A ??",
+          "note": "????"
+        },
+        {
+          "id": "day_mon_2",
+          "time": "09:00",
+          "subject": "???",
+          "location": "1-A ??",
+          "note": "??? 1 ?"
+        },
+        {
+          "id": "day_mon_3",
+          "time": "10:10",
+          "subject": "??",
+          "location": "1-A ??",
+          "note": "???"
+        },
+        {
+          "id": "day_mon_4",
+          "time": "11:20",
+          "subject": "??",
+          "location": "1-A ??",
+          "note": "????"
+        },
+        {
+          "id": "day_mon_5",
+          "time": "12:20",
+          "subject": "??",
+          "location": "?? / ??",
+          "note": ""
+        },
+        {
+          "id": "day_mon_6",
+          "time": "13:20",
+          "subject": "??",
+          "location": "???",
+          "note": "???"
+        },
+        {
+          "id": "day_mon_7",
+          "time": "14:30",
+          "subject": "??",
+          "location": "1-A ??",
+          "note": "????"
+        }
+      ]
+    },
+    {
+      "id": "day_tue",
+      "label": "??",
+      "dateLabel": "?????",
+      "note": "",
+      "schedule": [
+        {
+          "id": "day_tue_1",
+          "time": "08:20",
+          "subject": "??",
+          "location": "1-A ??",
+          "note": ""
+        },
+        {
+          "id": "day_tue_2",
+          "time": "09:00",
+          "subject": "???",
+          "location": "1-A ??",
+          "note": "????"
+        },
+        {
+          "id": "day_tue_3",
+          "time": "10:10",
+          "subject": "??",
+          "location": "???",
+          "note": "????"
+        },
+        {
+          "id": "day_tue_4",
+          "time": "11:20",
+          "subject": "??",
+          "location": "1-A ??",
+          "note": ""
+        },
+        {
+          "id": "day_tue_5",
+          "time": "12:20",
+          "subject": "??",
+          "location": "??",
+          "note": ""
+        },
+        {
+          "id": "day_tue_6",
+          "time": "13:20",
+          "subject": "??",
+          "location": "???",
+          "note": "??"
+        },
+        {
+          "id": "day_tue_7",
+          "time": "14:30",
+          "subject": "????",
+          "location": "????",
+          "note": ""
+        }
+      ]
+    },
+    {
+      "id": "day_wed",
+      "label": "??",
+      "dateLabel": "?????",
+      "note": "",
+      "schedule": [
+        {
+          "id": "day_wed_1",
+          "time": "08:20",
+          "subject": "??",
+          "location": "1-A ??",
+          "note": ""
+        },
+        {
+          "id": "day_wed_2",
+          "time": "09:00",
+          "subject": "??",
+          "location": "1-A ??",
+          "note": "????"
+        },
+        {
+          "id": "day_wed_3",
+          "time": "10:10",
+          "subject": "??",
+          "location": "????",
+          "note": "????"
+        },
+        {
+          "id": "day_wed_4",
+          "time": "11:20",
+          "subject": "???",
+          "location": "1-A ??",
+          "note": ""
+        },
+        {
+          "id": "day_wed_5",
+          "time": "12:20",
+          "subject": "??",
+          "location": "??",
+          "note": ""
+        },
+        {
+          "id": "day_wed_6",
+          "time": "13:20",
+          "subject": "??",
+          "location": "???",
+          "note": "????"
+        },
+        {
+          "id": "day_wed_7",
+          "time": "14:30",
+          "subject": "??",
+          "location": "???",
+          "note": ""
+        }
+      ]
+    },
+    {
+      "id": "day_thu",
+      "label": "??",
+      "dateLabel": "?????",
+      "note": "",
+      "schedule": [
+        {
+          "id": "day_thu_1",
+          "time": "08:20",
+          "subject": "??",
+          "location": "1-A ??",
+          "note": ""
+        },
+        {
+          "id": "day_thu_2",
+          "time": "09:00",
+          "subject": "??",
+          "location": "1-A ??",
+          "note": "??"
+        },
+        {
+          "id": "day_thu_3",
+          "time": "10:10",
+          "subject": "??",
+          "location": "1-A ??",
+          "note": ""
+        },
+        {
+          "id": "day_thu_4",
+          "time": "11:20",
+          "subject": "??",
+          "location": "????",
+          "note": "????"
+        },
+        {
+          "id": "day_thu_5",
+          "time": "12:20",
+          "subject": "??",
+          "location": "??",
+          "note": ""
+        },
+        {
+          "id": "day_thu_6",
+          "time": "13:20",
+          "subject": "???",
+          "location": "?????",
+          "note": ""
+        },
+        {
+          "id": "day_thu_7",
+          "time": "14:30",
+          "subject": "????",
+          "location": "????",
+          "note": ""
+        }
+      ]
+    },
+    {
+      "id": "day_fri",
+      "label": "??",
+      "dateLabel": "?????",
+      "note": "",
+      "schedule": [
+        {
+          "id": "day_fri_1",
+          "time": "08:20",
+          "subject": "??",
+          "location": "1-A ??",
+          "note": ""
+        },
+        {
+          "id": "day_fri_2",
+          "time": "09:00",
+          "subject": "???",
+          "location": "1-A ??",
+          "note": "??"
+        },
+        {
+          "id": "day_fri_3",
+          "time": "10:10",
+          "subject": "??",
+          "location": "1-A ??",
+          "note": ""
+        },
+        {
+          "id": "day_fri_4",
+          "time": "11:20",
+          "subject": "??",
+          "location": "1-A ??",
+          "note": "????"
+        },
+        {
+          "id": "day_fri_5",
+          "time": "12:20",
+          "subject": "??",
+          "location": "?? / ??",
+          "note": ""
+        },
+        {
+          "id": "day_fri_6",
+          "time": "13:20",
+          "subject": "??",
+          "location": "??",
+          "note": "??????"
+        },
+        {
+          "id": "day_fri_7",
+          "time": "14:30",
+          "subject": "????",
+          "location": "1-A ??",
+          "note": "????"
+        }
+      ]
+    },
+    {
+      "id": "day_sat",
+      "label": "??",
+      "dateLabel": "??",
+      "note": "",
+      "schedule": [
+        {
+          "id": "day_sat_1",
+          "time": "10:00",
+          "subject": "?? / ??",
+          "location": "??",
+          "note": "?????"
+        },
+        {
+          "id": "day_sat_2",
+          "time": "13:00",
+          "subject": "????",
+          "location": "??",
+          "note": ""
+        }
+      ]
+    },
+    {
+      "id": "day_sun",
+      "label": "??",
+      "dateLabel": "???",
+      "note": "",
+      "schedule": [
+        {
+          "id": "day_sun_1",
+          "time": "??",
+          "subject": "??",
+          "location": "??",
+          "note": "?????"
+        }
+      ]
+    }
+  ]
 }

@@ -91,6 +91,7 @@ function createInitialState() {
     settings: {
       gameTime: "开学首日 18:12",
       schoolDay: "周一",
+      currentDayId: "day_mon",
       feedName: "Kokubayashi SNS",
       chatName: "K-LINE"
     },
@@ -113,6 +114,7 @@ function createInitialState() {
         createdAt: now
       }
     ],
+    calendarDays: defaultCalendarDays(),
     posts: [
       {
         id: id("post"),
@@ -149,14 +151,16 @@ function createInitialState() {
 }
 
 function normalizeState(state) {
-  state.version = Math.max(Number(state.version || 1), 3);
+  state.version = Math.max(Number(state.version || 1), 4);
   state.settings ||= {};
   state.settings.gameTime ||= "开学首日 18:12";
   state.settings.schoolDay ||= "周一";
+  state.settings.currentDayId ||= "day_mon";
   state.settings.feedName ||= "Kokubayashi SNS";
   state.settings.chatName ||= "K-LINE";
   state.characters ||= [];
   state.chats ||= [];
+  state.calendarDays ||= defaultCalendarDays();
   state.posts ||= [];
   state.messages ||= [];
   state.emojis ||= defaultEmojis();
@@ -185,6 +189,13 @@ function normalizeState(state) {
     updatedAt: relationship.updatedAt || relationship.createdAt || new Date().toISOString()
   })).filter((relationship) => relationship.requesterId && relationship.targetId);
 
+  state.calendarDays = normalizeCalendarDays(state.calendarDays);
+  if (!state.calendarDays.some((day) => day.id === state.settings.currentDayId)) {
+    state.settings.currentDayId = state.calendarDays[0]?.id || "day_mon";
+  }
+  const currentDay = state.calendarDays.find((day) => day.id === state.settings.currentDayId);
+  if (currentDay) state.settings.schoolDay = currentDay.label;
+
   for (const post of state.posts) {
     post.metrics = normalizeMetrics(post.metrics);
     post.replies ||= [];
@@ -206,6 +217,125 @@ function normalizeState(state) {
 
 function defaultEmojis() {
   return [];
+}
+
+function defaultCalendarDays() {
+  return [
+    makeCalendarDay("day_mon", "周一", "开学首日", [
+      ["08:20", "朝会", "1-A 教室", "出席确认"],
+      ["09:00", "现代文", "1-A 教室", "课本第 1 章"],
+      ["10:10", "数学", "1-A 教室", "小测验"],
+      ["11:20", "英语", "1-A 教室", "听力练习"],
+      ["12:20", "午休", "中庭 / 食堂", ""],
+      ["13:20", "体育", "体育馆", "运动服"],
+      ["14:30", "班会", "1-A 教室", "社团登记"]
+    ]),
+    makeCalendarDay("day_tue", "周二", "开学第二日", [
+      ["08:20", "朝会", "1-A 教室", ""],
+      ["09:00", "世界史", "1-A 教室", "古代文明"],
+      ["10:10", "化学", "实验室", "安全说明"],
+      ["11:20", "数学", "1-A 教室", ""],
+      ["12:20", "午休", "食堂", ""],
+      ["13:20", "美术", "美术室", "素描"],
+      ["14:30", "社团时间", "各活动室", ""]
+    ]),
+    makeCalendarDay("day_wed", "周三", "开学第三日", [
+      ["08:20", "朝会", "1-A 教室", ""],
+      ["09:00", "英语", "1-A 教室", "单词测试"],
+      ["10:10", "物理", "理科教室", "力学导入"],
+      ["11:20", "现代文", "1-A 教室", ""],
+      ["12:20", "午休", "中庭", ""],
+      ["13:20", "音乐", "音乐室", "合唱练习"],
+      ["14:30", "自习", "图书室", ""]
+    ]),
+    makeCalendarDay("day_thu", "周四", "开学第四日", [
+      ["08:20", "朝会", "1-A 教室", ""],
+      ["09:00", "数学", "1-A 教室", "函数"],
+      ["10:10", "古典", "1-A 教室", ""],
+      ["11:20", "生物", "理科教室", "观察记录"],
+      ["12:20", "午休", "食堂", ""],
+      ["13:20", "家庭科", "家庭科教室", ""],
+      ["14:30", "社团时间", "各活动室", ""]
+    ]),
+    makeCalendarDay("day_fri", "周五", "开学第五日", [
+      ["08:20", "朝会", "1-A 教室", ""],
+      ["09:00", "现代文", "1-A 教室", "作文"],
+      ["10:10", "英语", "1-A 教室", ""],
+      ["11:20", "地理", "1-A 教室", "地图演习"],
+      ["12:20", "午休", "中庭 / 食堂", ""],
+      ["13:20", "体育", "操场", "雨天改体育馆"],
+      ["14:30", "周末班会", "1-A 教室", "值日确认"]
+    ]),
+    makeCalendarDay("day_sat", "周六", "周末", [
+      ["10:00", "补习 / 社团", "校内", "参加者确认"],
+      ["13:00", "自由活动", "校内", ""]
+    ]),
+    makeCalendarDay("day_sun", "周日", "休校日", [
+      ["全天", "休校", "校外", "无正式课程"]
+    ])
+  ];
+}
+
+function makeCalendarDay(idValue, label, dateLabel, rows) {
+  return {
+    id: idValue,
+    label,
+    dateLabel,
+    note: "",
+    schedule: rows.map(([time, subject, location, note], index) => ({
+      id: `${idValue}_${index + 1}`,
+      time,
+      subject,
+      location,
+      note
+    }))
+  };
+}
+
+function normalizeCalendarDays(days) {
+  const fallback = defaultCalendarDays();
+  const source = Array.isArray(days) && days.length ? days : fallback;
+  return source.map((day, index) => {
+    const fallbackDay = fallback[index] || fallback[0];
+    return {
+      id: String(day.id || fallbackDay.id || id("day")),
+      label: String(day.label || fallbackDay.label || `Day ${index + 1}`).trim(),
+      dateLabel: String(day.dateLabel || day.date || fallbackDay.dateLabel || "").trim(),
+      note: String(day.note || "").trim(),
+      schedule: normalizeSchedule(day.schedule)
+    };
+  });
+}
+
+function normalizeSchedule(schedule) {
+  if (!Array.isArray(schedule)) return [];
+  return schedule.map((item, index) => ({
+    id: item.id || id("period"),
+    time: String(item.time || "").trim(),
+    subject: String(item.subject || item.title || `Period ${index + 1}`).trim(),
+    location: String(item.location || "").trim(),
+    note: String(item.note || "").trim()
+  })).filter((item) => item.time || item.subject || item.location || item.note);
+}
+
+function parseScheduleText(value) {
+  return String(value || "")
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .map((line, index) => {
+      const parts = line.split("|").map((part) => part.trim());
+      if (parts.length === 1) {
+        return { id: id("period"), time: "", subject: parts[0] || `Period ${index + 1}`, location: "", note: "" };
+      }
+      return {
+        id: id("period"),
+        time: parts[0] || "",
+        subject: parts[1] || `Period ${index + 1}`,
+        location: parts[2] || "",
+        note: parts.slice(3).join(" | ")
+      };
+    });
 }
 
 function readSeedState() {
@@ -672,6 +802,33 @@ async function routeApi(req, res, url) {
     return;
   }
 
+  if (req.method === "PATCH" && url.pathname === "/api/calendar/current") {
+    if (!requireAdmin(req, res)) return;
+    const day = state.calendarDays.find((item) => item.id === body.dayId);
+    if (!day) return sendJson(res, 404, { error: "Calendar day not found." });
+    state.settings.currentDayId = day.id;
+    state.settings.schoolDay = day.label;
+    writeState(state);
+    sendJson(res, 200, publicState(state));
+    return;
+  }
+
+  if (req.method === "PATCH" && url.pathname.startsWith("/api/calendar/days/")) {
+    if (!requireAdmin(req, res)) return;
+    const dayId = decodeURIComponent(url.pathname.split("/").pop());
+    const day = state.calendarDays.find((item) => item.id === dayId);
+    if (!day) return sendJson(res, 404, { error: "Calendar day not found." });
+    if (body.label !== undefined) day.label = String(body.label || day.label).trim();
+    if (body.dateLabel !== undefined) day.dateLabel = String(body.dateLabel || "").trim();
+    if (body.note !== undefined) day.note = String(body.note || "").trim();
+    if (body.scheduleText !== undefined) day.schedule = parseScheduleText(body.scheduleText);
+    if (Array.isArray(body.schedule)) day.schedule = normalizeSchedule(body.schedule);
+    if (state.settings.currentDayId === day.id) state.settings.schoolDay = day.label;
+    writeState(state);
+    sendJson(res, 200, publicState(state));
+    return;
+  }
+
   if (req.method === "POST" && url.pathname === "/api/characters") {
     if (!requireAdmin(req, res)) return;
     const name = String(body.name || "").trim();
@@ -1012,6 +1169,18 @@ function exportMarkdown(state) {
     "## SNS 时间线",
     ""
   ];
+
+  lines.push("## 校历 / 课程表", "");
+  for (const day of state.calendarDays || []) {
+    const current = day.id === state.settings.currentDayId ? "（当前日）" : "";
+    lines.push(`### ${day.label} ${day.dateLabel || ""} ${current}`.trim(), "");
+    if (day.note) lines.push(day.note, "");
+    for (const item of day.schedule || []) {
+      const details = [item.location, item.note].filter(Boolean).join(" / ");
+      lines.push(`- ${item.time || ""} ${item.subject || ""}${details ? `：${details}` : ""}`.trim());
+    }
+    lines.push("");
+  }
 
   for (const post of [...state.posts].sort((a, b) => String(a.createdAt).localeCompare(String(b.createdAt)))) {
     const author = byId.get(post.authorId);
