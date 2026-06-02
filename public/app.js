@@ -128,6 +128,7 @@ async function handleAction(target) {
   if (action === "lock-gm") return lockGm();
   if (action === "save-settings") return saveSettings();
   if (action === "create-character") return createCharacter();
+  if (action === "save-character-tags") return saveCharacterTags(target.dataset.characterId);
   if (action === "create-chat") return createChat();
   if (action === "create-player-account") return createPlayerAccount();
   if (action === "login-player-account") return loginPlayerAccount();
@@ -403,7 +404,7 @@ function renderPlayerChatTools() {
     <label class="member-option compact">
       <input type="checkbox" class="private-member-checkbox" value="${character.id}">
       <span>${escapeHtml(character.name)}</span>
-      <span class="type-pill">${typeLabel(character)}</span>
+      ${renderCharacterTags(character)}
     </label>
   `).join("");
 
@@ -609,7 +610,8 @@ function renderProfileOverlay() {
           ${renderAvatar(profile)}
           <div class="profile-heading">
             <div class="profile-name">${escapeHtml(profile.name)}</div>
-            <div class="profile-handle">${escapeHtml(profile.handle)} · ${typeLabel(profile)}</div>
+            <div class="profile-handle">${escapeHtml(profile.handle)}</div>
+            ${renderCharacterTags(profile)}
           </div>
         </div>
         <div class="profile-stats">
@@ -1100,10 +1102,11 @@ function renderGm() {
             <label>名称 <input id="new-character-name"></label>
             <label>Handle <input id="new-character-handle" placeholder="@handle"></label>
           </div>
+          <label>标签 <input id="new-character-tags" placeholder="1-A, 风纪委员, 可攻略"></label>
           <label>类型
             <select id="new-character-type">
-              <option value="npc">NPC</option>
-              <option value="player">玩家</option>
+              <option value="npc">GM 扮演角色</option>
+              <option value="player">预设玩家角色</option>
             </select>
           </label>
           <button class="primary-button" type="button" data-action="create-character">创建角色</button>
@@ -1119,7 +1122,7 @@ function renderGm() {
               <label class="member-option">
                 <input type="checkbox" class="member-checkbox" value="${character.id}">
                 <span>${escapeHtml(character.name)}</span>
-                <span class="type-pill">${typeLabel(character)}</span>
+                ${renderCharacterTags(character)}
               </label>
             `).join("")}
           </div>
@@ -1143,8 +1146,12 @@ function renderGm() {
               <div class="name-block">
                 <div class="name">${escapeHtml(character.name)}</div>
                 <div class="handle">${escapeHtml(character.handle)}</div>
+                ${renderCharacterTags(character)}
               </div>
-              <span class="type-pill">${typeLabel(character)}</span>
+              <div class="tag-editor">
+                <input id="character-tags-${escapeAttr(character.id)}" value="${escapeAttr(characterTagInputValue(character))}" placeholder="标签，用逗号分隔">
+                <button class="secondary-button compact-action" type="button" data-action="save-character-tags" data-character-id="${escapeAttr(character.id)}">保存标签</button>
+              </div>
             </div>
           `).join("")}
         </div>
@@ -1491,10 +1498,25 @@ async function createCharacter() {
     body: {
       name,
       handle: document.getElementById("new-character-handle")?.value,
-      type: document.getElementById("new-character-type")?.value
+      type: document.getElementById("new-character-type")?.value,
+      tags: parseTagInput(document.getElementById("new-character-tags")?.value)
     }
   });
   await refresh(true);
+}
+
+async function saveCharacterTags(characterId) {
+  if (!characterId) return;
+  const input = document.getElementById(`character-tags-${characterId}`);
+  stateBag.data = await api(`/api/characters/${encodeURIComponent(characterId)}`, {
+    method: "PATCH",
+    admin: true,
+    body: {
+      tags: parseTagInput(input?.value)
+    }
+  });
+  showNotice("标签已保存。");
+  render();
 }
 
 async function createPlayerAccount() {
@@ -1967,7 +1989,8 @@ function renderActorPreview(actor) {
     ${renderAvatar(actor)}
       <div class="name-block">
         <div class="name">${escapeHtml(actor.name)}</div>
-      <div class="handle">${escapeHtml(actor.handle)} · ${typeLabel(actor)}</div>
+      <div class="handle">${escapeHtml(actor.handle)}</div>
+      ${renderCharacterTags(actor)}
     </div>
   `;
 }
@@ -2001,10 +2024,28 @@ function renderImageAttachment(attachment, className = "chat-image") {
   `;
 }
 
-function typeLabel(actor) {
-  if (actor?.type === "account") return "账号";
-  if (actor?.type === "player") return "PC";
-  return "NPC";
+function parseTagInput(value) {
+  return String(value || "")
+    .split(/[,，、\n]/)
+    .map((item) => item.trim())
+    .filter(Boolean)
+    .map((item) => item.slice(0, 24))
+    .filter((item, index, list) => list.indexOf(item) === index)
+    .slice(0, 12);
+}
+
+function characterTags(actor) {
+  return Array.isArray(actor?.tags) ? actor.tags.filter(Boolean) : [];
+}
+
+function characterTagInputValue(actor) {
+  return characterTags(actor).join(", ");
+}
+
+function renderCharacterTags(actor) {
+  const tags = characterTags(actor);
+  if (!tags.length) return "";
+  return `<span class="tag-list">${tags.map((tag) => `<span class="tag-pill">${escapeHtml(tag)}</span>`).join("")}</span>`;
 }
 
 function typeLabelForBulletin(type) {

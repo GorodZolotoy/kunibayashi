@@ -202,6 +202,7 @@ function normalizeState(state) {
     character.avatarText ||= avatarText(character.name);
     character.handle = `@${String(character.handle || makeHandle(character.name)).replace(/^@/, "")}`;
     character.type ||= "npc";
+    character.tags = normalizeTags(character.tags);
     character.active = character.active !== false;
   }
 
@@ -643,6 +644,7 @@ function makeCharacter(idValue, name, handle, type) {
     color: PALETTE[colorIndex],
     avatarText: avatarText(name),
     avatarData: "",
+    tags: [],
     note: "",
     active: true,
     createdAt: new Date().toISOString()
@@ -806,6 +808,17 @@ function normalizeShortcode(value) {
   const shortcode = String(value || "").trim().replace(/^:+|:+$/g, "").toLowerCase();
   if (!/^[a-z0-9_\-]{1,24}$/.test(shortcode)) return "";
   return shortcode;
+}
+
+function normalizeTags(value) {
+  const source = Array.isArray(value)
+    ? value
+    : String(value || "").split(/[,，、\n]/);
+  const tags = source
+    .map((item) => String(item || "").trim())
+    .filter(Boolean)
+    .map((item) => item.slice(0, 24));
+  return Array.from(new Set(tags)).slice(0, 12);
 }
 
 function validateDataUrl(value, maxLength, label) {
@@ -1298,6 +1311,7 @@ async function routeApi(req, res, url) {
       }
     }
     character.note = String(body.note || "").trim();
+    character.tags = normalizeTags(body.tags);
     state.characters.push(character);
     writeState(state);
     sendJson(res, 201, publicState(state));
@@ -1321,6 +1335,7 @@ async function routeApi(req, res, url) {
       }
     }
     if (body.note !== undefined) character.note = String(body.note).trim();
+    if (body.tags !== undefined) character.tags = normalizeTags(body.tags);
     if (body.active !== undefined) character.active = Boolean(body.active);
     writeState(state);
     sendJson(res, 200, publicState(state));
