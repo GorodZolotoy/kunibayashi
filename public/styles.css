@@ -251,6 +251,112 @@ textarea {
   font-weight: 800;
 }
 
+.account-session-card,
+.saved-account-button {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.account-session-card {
+  padding: 8px;
+  border: 1px solid var(--line);
+  background: rgba(255, 253, 244, 0.82);
+  border-radius: var(--radius);
+}
+
+.saved-account-list {
+  display: grid;
+  gap: 6px;
+}
+
+.saved-account-button {
+  text-align: left;
+  border: 1px solid var(--line);
+  background: var(--surface);
+  color: var(--ink);
+  border-radius: var(--radius);
+  padding: 7px 8px;
+  min-height: 44px;
+}
+
+.saved-account-button.active {
+  border-color: rgba(15, 95, 63, 0.28);
+  background: rgba(0, 166, 103, 0.1);
+}
+
+.saved-account-button:disabled {
+  cursor: default;
+  opacity: 1;
+}
+
+.saved-account-button .avatar,
+.account-session-card .avatar {
+  flex: 0 0 34px;
+  width: 34px;
+  height: 34px;
+  font-size: 12px;
+}
+
+.saved-account-button .name-block {
+  display: grid;
+  gap: 1px;
+}
+
+.account-manager-grid {
+  display: grid;
+  grid-template-columns: minmax(260px, 420px) minmax(0, 1fr);
+  gap: 14px;
+  align-items: start;
+}
+
+.credential-card {
+  display: grid;
+  gap: 5px;
+  padding: 10px;
+  border: 1px solid rgba(15, 95, 63, 0.22);
+  background: rgba(0, 166, 103, 0.08);
+  border-radius: var(--radius);
+}
+
+.credential-card code {
+  font-family: inherit;
+  font-weight: 850;
+  color: var(--school-green);
+}
+
+.account-list-panel {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+}
+
+.account-list {
+  display: grid;
+  gap: 6px;
+  max-height: 360px;
+  overflow: auto;
+}
+
+.account-list-row {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 8px;
+  border: 1px solid var(--line);
+  background: rgba(255, 253, 244, 0.78);
+  border-radius: var(--radius);
+  min-width: 0;
+}
+
+.account-list-row .avatar {
+  flex: 0 0 34px;
+  width: 34px;
+  height: 34px;
+  font-size: 12px;
+}
+
 .file-picker {
   display: inline-flex;
   align-items: center;
@@ -1163,12 +1269,35 @@ textarea {
   display: flex;
   gap: 6px;
   align-items: center;
+  flex-wrap: wrap;
   margin-left: auto;
   min-width: min(340px, 100%);
 }
 
 .tag-editor input {
+  flex: 1 1 160px;
   min-width: 0;
+}
+
+.avatar-editor {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: 1 1 100%;
+  min-width: 0;
+}
+
+.compact-file-picker {
+  min-height: 30px;
+  padding: 5px 9px;
+  font-size: 12px;
+}
+
+.avatar-hint {
+  max-width: 160px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .bottom-nav {
@@ -1981,6 +2110,10 @@ select:focus {
 
   .roster-row {
     flex-wrap: wrap;
+  }
+
+  .account-manager-grid {
+    grid-template-columns: 1fr;
   }
 
   .tag-editor {

@@ -202,6 +202,7 @@ function normalizeState(state) {
     character.avatarText ||= avatarText(character.name);
     character.handle = `@${String(character.handle || makeHandle(character.name)).replace(/^@/, "")}`;
     character.type ||= "npc";
+    if (character.type === "account") character.username = normalizeUsername(character.username || character.handle || character.name, character.handle || character.name);
     character.tags = normalizeTags(character.tags);
     character.active = character.active !== false;
   }
@@ -811,6 +812,36 @@ function normalizeHandle(value, fallbackName) {
   return `@${compact.slice(0, 32)}`;
 }
 
+function normalizeUsername(value, fallbackName) {
+  const raw = String(value || "").replace(/^@/, "").trim();
+  const compact = raw || makeHandle(fallbackName);
+  return compact.slice(0, 40);
+}
+
+function loginKey(value) {
+  return String(value || "").replace(/^@/, "").trim().toLowerCase();
+}
+
+function findAccountByLogin(state, value) {
+  const key = loginKey(value);
+  if (!key) return null;
+  return state.characters.find((item) => (
+    item.type === "account" &&
+    item.active !== false &&
+    (loginKey(item.handle) === key || loginKey(item.username) === key)
+  ));
+}
+
+function isAccountLoginTaken(state, value, ignoreId = "") {
+  const key = loginKey(value);
+  if (!key) return false;
+  return state.characters.some((item) => (
+    item.id !== ignoreId &&
+    item.type === "account" &&
+    (loginKey(item.handle) === key || loginKey(item.username) === key)
+  ));
+}
+
 function normalizeShortcode(value) {
   const shortcode = String(value || "").trim().replace(/^:+|:+$/g, "").toLowerCase();
   if (!/^[a-z0-9_\-]{1,24}$/.test(shortcode)) return "";
@@ -999,7 +1030,8 @@ async function routeApi(req, res, url) {
   }
 
   if (req.method === "POST" && url.pathname === "/api/player-accounts") {
-    const name = String(body.name || "").trim();
+    const gmCreated = isAdmin(req);
+    const name = String(body.name || body.displayName || body.username || "").trim();
     if (!name) return sendJson(res, 400, { error: "Account name is required." });
     if (name.length > 40) return sendJson(res, 400, { error: "Account name is too long." });
     const passcode = normalizePasscode(body.passcode);
@@ -1007,6 +1039,13 @@ async function routeApi(req, res, url) {
     const handle = normalizeHandle(body.handle, name);
     if (state.characters.some((character) => character.handle.toLowerCase() === handle.toLowerCase())) {
       return sendJson(res, 409, { error: "That handle is already taken." });
+    }
+    if (isAccountLoginTaken(state, handle)) {
+      return sendJson(res, 409, { error: "That handle conflicts with an account username." });
+    }
+    const username = normalizeUsername(body.username || handle, handle);
+    if (isAccountLoginTaken(state, username)) {
+      return sendJson(res, 409, { error: "That username is already taken." });
     }
 
     let avatarData = "";
@@ -1018,11 +1057,19 @@ async function routeApi(req, res, url) {
 
     const accessToken = crypto.randomBytes(24).toString("hex");
     const salt = crypto.randomBytes(12).toString("hex");
-    const character = makeCharacter(id("acct"), name, handle, "account");
+    const accountId = id("acct");
+    const character = makeCharacter(accountId, name, handle, "account");
+    character.username = username;
     character.avatarData = avatarData;
     character.accessToken = accessToken;
     character.auth = { salt, passcodeHash: hashPasscode(passcode, salt) };
-    character.note = "Self-created player account";
+    character.note = gmCreated ? "GM-created player account" : "Self-created player account";
+    if (gmCreated) character.tags = normalizeTags(body.tags);
+
+    if (gmCreated) {
+      pushUndo(state, "create_player_account", `创建玩家账号：${name}`, ["characters", "chats"], { accountId, handle, username });
+    }
+
     state.characters.push(character);
 
     for (const chat of state.chats) {
@@ -1041,16 +1088,16 @@ async function routeApi(req, res, url) {
   }
 
   if (req.method === "POST" && url.pathname === "/api/player-accounts/login") {
-    const handle = String(body.handle || "").replace(/^@/, "").trim().toLowerCase();
+    const login = String(body.login || body.username || body.handle || "").trim();
     const passcode = normalizePasscode(body.passcode);
-    if (!handle || !passcode) return sendJson(res, 400, { error: "Handle and passcode are required." });
+    if (!login || !passcode) return sendJson(res, 400, { error: "Username/@handle and passcode are required." });
 
-    const character = state.characters.find((item) => item.type === "account" && item.handle.replace(/^@/, "").toLowerCase() === handle);
+    const character = findAccountByLogin(state, login);
     if (!character?.auth?.salt || !character?.auth?.passcodeHash) {
       return sendJson(res, 401, { error: "Account not found or cannot be recovered." });
     }
     if (hashPasscode(passcode, character.auth.salt) !== character.auth.passcodeHash) {
-      return sendJson(res, 401, { error: "Handle or passcode is incorrect." });
+      return sendJson(res, 401, { error: "Username/@handle or passcode is incorrect." });
     }
 
     character.accessToken = crypto.randomBytes(24).toString("hex");
@@ -1080,7 +1127,17 @@ async function routeApi(req, res, url) {
       if (state.characters.some((item) => item.id !== character.id && item.handle.toLowerCase() === handle.toLowerCase())) {
         return sendJson(res, 409, { error: "That handle is already taken." });
       }
+      if (isAccountLoginTaken(state, handle, character.id)) {
+        return sendJson(res, 409, { error: "That handle conflicts with an account username." });
+      }
       character.handle = handle;
+    }
+    if (body.username !== undefined) {
+      const username = normalizeUsername(body.username, character.handle || character.name);
+      if (isAccountLoginTaken(state, username, character.id)) {
+        return sendJson(res, 409, { error: "That username is already taken." });
+      }
+      character.username = username;
     }
     if (body.avatarData !== undefined) {
       try {

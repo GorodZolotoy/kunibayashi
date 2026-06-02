@@ -8,6 +8,7 @@ const stateBag = {
   gmScheduleDayId: localStorage.getItem("kokubayashi.gmScheduleDayId") || "",
   profileId: "",
   privateChatOpen: false,
+  lastGmCreatedAccount: null,
   gmPin: localStorage.getItem("kokubayashi.gmPin") || "",
   accountTokens: readAccountTokens(),
   gmUnlocked: localStorage.getItem("kokubayashi.gmUnlocked") === "true"
@@ -65,11 +66,16 @@ function bindGlobalEvents() {
       "message-image": "未选择图片",
       "account-avatar": "未选择头像",
       "avatar-update-file": "未选择头像",
+      "gm-account-avatar": "未选择头像",
       "emoji-file": "未选择图片"
     };
     if (event.target?.id && imageHints[event.target.id]) {
       const hint = document.getElementById(`${event.target.id}-hint`);
       if (hint) hint.textContent = event.target.files?.[0]?.name || imageHints[event.target.id];
+    }
+    if (event.target?.classList?.contains("account-avatar-input")) {
+      const hint = document.getElementById(`account-avatar-hint-${event.target.dataset.characterId}`);
+      if (hint) hint.textContent = event.target.files?.[0]?.name || "未选择头像";
     }
     if (event.target?.id === "gm-schedule-day") {
       stateBag.gmScheduleDayId = event.target.value;
@@ -130,11 +136,15 @@ async function handleAction(target) {
   if (action === "lock-gm") return lockGm();
   if (action === "save-settings") return saveSettings();
   if (action === "create-character") return createCharacter();
+  if (action === "create-gm-player-account") return createGmPlayerAccount();
+  if (action === "update-account-avatar") return updateAccountAvatar(target.dataset.characterId);
   if (action === "save-character-tags") return saveCharacterTags(target.dataset.characterId);
   if (action === "delete-character") return deleteCharacter(target.dataset.characterId);
   if (action === "create-chat") return createChat();
   if (action === "create-player-account") return createPlayerAccount();
   if (action === "login-player-account") return loginPlayerAccount();
+  if (action === "switch-account") return switchAccount(target.dataset.characterId);
+  if (action === "logout-account") return logoutAccount(target.dataset.characterId);
   if (action === "update-avatar") return updateAvatar();
   if (action === "upload-emoji") return uploadEmoji();
   if (action === "insert-emoji") return insertEmoji(target.dataset.target, target.dataset.value);
@@ -208,8 +218,9 @@ function canAutoRender() {
 }
 
 function hasPendingFileSelection() {
-  return ["post-image", "message-image", "account-avatar", "avatar-update-file", "emoji-file"]
-    .some((id) => (document.getElementById(id)?.files?.length || 0) > 0);
+  return ["post-image", "message-image", "account-avatar", "avatar-update-file", "gm-account-avatar", "emoji-file"]
+    .some((id) => (document.getElementById(id)?.files?.length || 0) > 0)
+    || Array.from(document.querySelectorAll(".account-avatar-input")).some((input) => (input.files?.length || 0) > 0);
 }
 
 function hasDraftText() {
@@ -225,6 +236,11 @@ function hasDraftText() {
     "#account-passcode",
     "#login-handle",
     "#login-passcode",
+    "#gm-account-name",
+    "#gm-account-username",
+    "#gm-account-handle",
+    "#gm-account-passcode",
+    "#gm-account-tags",
     "#emoji-shortcode",
     "#calendar-date-label",
     "#calendar-note",
@@ -252,7 +268,7 @@ function renderShell() {
 
   const actors = availableActors();
   els.actorSelect.innerHTML = actors.length
-    ? actors.map((actor) => `<option value="${actor.id}">${escapeHtml(actor.name)} ${escapeHtml(actor.handle)}</option>`).join("")
+    ? `${stateBag.gmUnlocked ? "" : `<option value="">未选择账号</option>`}${actors.map((actor) => `<option value="${actor.id}">${escapeHtml(actor.name)} ${escapeHtml(actor.handle)}</option>`).join("")}`
     : `<option value="">创建玩家账号后使用</option>`;
   els.actorSelect.value = stateBag.actorId;
   els.actorPreview.innerHTML = renderActorPreview(getActor(stateBag.actorId));
@@ -671,7 +687,8 @@ function renderAccountTools() {
   }
 
   const actor = currentActor();
-  const accountForm = `
+  const savedActors = availableActors();
+  const accountCreateForm = `
     <div class="mini-form">
       <div class="mini-title">创建玩家账号</div>
       <input id="account-name" maxlength="40" placeholder="显示名">
@@ -682,17 +699,32 @@ function renderAccountTools() {
       </label>
       <button class="secondary-button" type="button" data-action="create-player-account">创建账号</button>
     </div>
+  `;
+  const loginForm = `
     <div class="mini-form">
       <div class="mini-title">登录已有账号</div>
-      <input id="login-handle" maxlength="32" placeholder="@handle">
+      <input id="login-handle" maxlength="40" placeholder="用户名或 @handle">
       <input id="login-passcode" maxlength="80" type="password" placeholder="登录码">
       <button class="secondary-button" type="button" data-action="login-player-account">登录账号</button>
     </div>
   `;
+  const switcher = renderAccountSwitcher(savedActors);
 
-  if (!actor) return accountForm;
+  if (!actor) return `${switcher}${accountCreateForm}${loginForm}`;
 
   return `
+    <div class="mini-form">
+      <div class="mini-title">当前账号</div>
+      <div class="account-session-card">
+        ${renderAvatar(actor)}
+        <div class="name-block">
+          <div class="name">${escapeHtml(actor.name)}</div>
+          <div class="handle">${escapeHtml(actor.handle)}</div>
+        </div>
+      </div>
+      <button class="danger-button" type="button" data-action="logout-account" data-character-id="${escapeAttr(actor.id)}">退出当前账号</button>
+    </div>
+    ${switcher}
     <div class="mini-form">
       <div class="mini-title">账号设置</div>
       <label class="file-picker">更换头像
@@ -700,6 +732,7 @@ function renderAccountTools() {
       </label>
       <button class="secondary-button" type="button" data-action="update-avatar">更新头像</button>
     </div>
+    ${loginForm}
     <div class="mini-form">
       <div class="mini-title">自定义 Emoji</div>
       <input id="emoji-shortcode" maxlength="24" placeholder="shortcode">
@@ -707,6 +740,29 @@ function renderAccountTools() {
         <input id="emoji-file" type="file" accept="image/*">
       </label>
       <button class="secondary-button" type="button" data-action="upload-emoji">上传 Emoji</button>
+    </div>
+  `;
+}
+
+function renderAccountSwitcher(savedActors) {
+  if (!savedActors.length) return "";
+  return `
+    <div class="mini-form">
+      <div class="mini-title">切换账号</div>
+      <div class="saved-account-list">
+        ${savedActors.map((account) => {
+          const active = account.id === stateBag.actorId;
+          return `
+            <button class="saved-account-button ${active ? "active" : ""}" type="button" data-action="switch-account" data-character-id="${escapeAttr(account.id)}" ${active ? "disabled" : ""}>
+              ${renderAvatar(account)}
+              <span class="name-block">
+                <span class="name">${escapeHtml(account.name)}</span>
+                <span class="handle">${escapeHtml(account.handle)}${active ? " · 当前" : ""}</span>
+              </span>
+            </button>
+          `;
+        }).join("")}
+      </div>
     </div>
   `;
 }
@@ -1045,6 +1101,61 @@ function renderGmEditLog() {
   `;
 }
 
+function renderGmPlayerAccountManager(chars) {
+  const accounts = chars.filter((character) => character.type === "account");
+  const recent = stateBag.lastGmCreatedAccount;
+  return `
+    <section class="gm-wide">
+      <div class="section-title">玩家账号管理</div>
+      <div class="account-manager-grid">
+        <div class="form-grid">
+          <div class="mini-title">代建玩家账号</div>
+          <div class="two-col">
+            <label>显示名 <input id="gm-account-name" maxlength="40"></label>
+            <label>登录用户名 <input id="gm-account-username" maxlength="40" autocomplete="off"></label>
+          </div>
+          <div class="two-col">
+            <label>@handle <input id="gm-account-handle" maxlength="32" placeholder="@handle"></label>
+            <label>初始密码 <input id="gm-account-passcode" maxlength="80" type="text" autocomplete="off"></label>
+          </div>
+          <label>标签 <input id="gm-account-tags" placeholder="1-A, 学生会, 社团"></label>
+          <div class="form-row">
+            <label class="file-picker">头像
+              <input id="gm-account-avatar" type="file" accept="image/*">
+            </label>
+            <span id="gm-account-avatar-hint" class="hint">未选择头像</span>
+          </div>
+          <button class="primary-button" type="button" data-action="create-gm-player-account">创建玩家账号</button>
+          ${recent ? `
+            <div class="credential-card">
+              <div class="mini-title">刚创建的登录信息</div>
+              <div><strong>${escapeHtml(recent.name)}</strong></div>
+              <div>用户名：<code>${escapeHtml(recent.username)}</code></div>
+              <div>@handle：<code>${escapeHtml(recent.handle)}</code></div>
+              <div>初始密码：<code>${escapeHtml(recent.passcode)}</code></div>
+            </div>
+          ` : ""}
+        </div>
+        <div class="account-list-panel">
+          <div class="mini-title">所有玩家账号</div>
+          <div class="account-list">
+            ${accounts.map((account) => `
+              <div class="account-list-row">
+                ${renderAvatar(account)}
+                <div class="name-block">
+                  <div class="name">${escapeHtml(account.name)}</div>
+                  <div class="handle">${escapeHtml(account.handle)} · ${escapeHtml(account.username || "")}</div>
+                  ${renderCharacterTags(account)}
+                </div>
+              </div>
+            `).join("") || `<div class="hint padded">还没有玩家账号。</div>`}
+          </div>
+        </div>
+      </div>
+    </section>
+  `;
+}
+
 function renderGm() {
   if (!stateBag.gmUnlocked) {
     els.viewRoot.innerHTML = `
@@ -1111,6 +1222,8 @@ function renderGm() {
       ${renderRelationshipGraph(chars)}
       ${renderGmEditLog()}
 
+      ${renderGmPlayerAccountManager(chars)}
+
       <section>
         <div class="section-title">新增角色</div>
         <div class="form-grid">
@@ -1161,13 +1274,22 @@ function renderGm() {
               ${renderAvatar(character)}
               <div class="name-block">
                 <div class="name">${escapeHtml(character.name)}</div>
-                <div class="handle">${escapeHtml(character.handle)}</div>
+                <div class="handle">${escapeHtml(character.handle)}${character.type === "account" && character.username ? ` · ${escapeHtml(character.username)}` : ""}</div>
                 ${renderCharacterTags(character)}
               </div>
               <div class="tag-editor">
                 <input id="character-tags-${escapeAttr(character.id)}" value="${escapeAttr(characterTagInputValue(character))}" placeholder="标签，用逗号分隔">
                 <button class="secondary-button compact-action" type="button" data-action="save-character-tags" data-character-id="${escapeAttr(character.id)}">保存标签</button>
                 <button class="danger-button compact-action" type="button" data-action="delete-character" data-character-id="${escapeAttr(character.id)}">删除</button>
+                ${character.type === "account" ? `
+                  <div class="avatar-editor">
+                    <label class="file-picker compact-file-picker">头像
+                      <input id="account-avatar-${escapeAttr(character.id)}" class="account-avatar-input" data-character-id="${escapeAttr(character.id)}" type="file" accept="image/*">
+                    </label>
+                    <span id="account-avatar-hint-${escapeAttr(character.id)}" class="hint avatar-hint">未选择头像</span>
+                    <button class="secondary-button compact-action" type="button" data-action="update-account-avatar" data-character-id="${escapeAttr(character.id)}">更新头像</button>
+                  </div>
+                ` : ""}
               </div>
             </div>
           `).join("")}
@@ -1552,6 +1674,59 @@ async function createCharacter() {
   await refresh(true);
 }
 
+async function createGmPlayerAccount() {
+  const name = document.getElementById("gm-account-name")?.value.trim();
+  const username = document.getElementById("gm-account-username")?.value.trim();
+  const handle = document.getElementById("gm-account-handle")?.value.trim();
+  const passcode = document.getElementById("gm-account-passcode")?.value.trim();
+  if (!name) return showNotice("玩家账号显示名为空。");
+  if (!username) return showNotice("请设置登录用户名。");
+  if (!handle) return showNotice("请设置 @handle。");
+  if (!passcode || passcode.length < 4) return showNotice("初始密码至少 4 个字符。");
+  const avatarFile = document.getElementById("gm-account-avatar")?.files?.[0];
+  const avatarData = avatarFile ? await fileToImageDataUrl(avatarFile, 384, 0.88, 2300000) : "";
+
+  const result = await api("/api/player-accounts", {
+    method: "POST",
+    admin: true,
+    body: {
+      name,
+      username,
+      handle,
+      passcode,
+      avatarData,
+      tags: parseTagInput(document.getElementById("gm-account-tags")?.value)
+    }
+  });
+
+  stateBag.data = result.state;
+  stateBag.lastGmCreatedAccount = {
+    name,
+    username,
+    handle: handle.startsWith("@") ? handle : `@${handle}`,
+    passcode
+  };
+  showNotice(`玩家账号已创建：${username} / ${handle.startsWith("@") ? handle : `@${handle}`}`);
+  render();
+}
+
+async function updateAccountAvatar(characterId) {
+  if (!characterId) return;
+  const character = getActor(characterId);
+  if (!character) return;
+  if (character.type !== "account") return showNotice("只有玩家账号可以用这个头像更新入口。");
+  const file = document.getElementById(`account-avatar-${characterId}`)?.files?.[0];
+  if (!file) return showNotice("请选择头像图片。");
+  const avatarData = await fileToImageDataUrl(file, 384, 0.88, 2300000);
+  stateBag.data = await api(`/api/characters/${encodeURIComponent(characterId)}`, {
+    method: "PATCH",
+    admin: true,
+    body: { avatarData }
+  });
+  showNotice(`头像已更新：${character.name}`);
+  render();
+}
+
 async function saveCharacterTags(characterId) {
   if (!characterId) return;
   const input = document.getElementById(`character-tags-${characterId}`);
@@ -1609,12 +1784,12 @@ async function createPlayerAccount() {
 }
 
 async function loginPlayerAccount() {
-  const handle = document.getElementById("login-handle")?.value.trim();
+  const login = document.getElementById("login-handle")?.value.trim();
   const passcode = document.getElementById("login-passcode")?.value.trim();
-  if (!handle || !passcode) return showNotice("请输入 handle 和登录码。");
+  if (!login || !passcode) return showNotice("请输入用户名或 @handle 和登录码。");
   const result = await api("/api/player-accounts/login", {
     method: "POST",
-    body: { handle, passcode }
+    body: { login, handle: login, passcode }
   });
   stateBag.accountTokens[result.accountId] = result.accountToken;
   saveAccountTokens();
@@ -1622,6 +1797,32 @@ async function loginPlayerAccount() {
   localStorage.setItem("kokubayashi.actorId", stateBag.actorId);
   stateBag.data = result.state;
   showNotice("账号已登录。");
+  render();
+}
+
+function switchAccount(characterId) {
+  if (!characterId) return;
+  const account = getActor(characterId);
+  if (!account || !stateBag.accountTokens[characterId]) return showNotice("这个账号需要重新登录。");
+  stateBag.actorId = characterId;
+  stateBag.profileId = "";
+  localStorage.setItem("kokubayashi.actorId", stateBag.actorId);
+  showNotice(`已切换到 ${account.name}。`);
+  render();
+}
+
+function logoutAccount(characterId = stateBag.actorId) {
+  const accountId = characterId || stateBag.actorId;
+  if (!accountId) return;
+  const account = getActor(accountId);
+  delete stateBag.accountTokens[accountId];
+  saveAccountTokens();
+  if (stateBag.actorId === accountId) {
+    stateBag.actorId = "";
+    stateBag.profileId = "";
+    localStorage.removeItem("kokubayashi.actorId");
+  }
+  showNotice(account ? `已退出 ${account.name}。` : "已退出账号。");
   render();
 }
 
