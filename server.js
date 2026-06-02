@@ -15,6 +15,8 @@ const MAX_AVATAR_DATA_URL_LENGTH = 2500000;
 const MAX_EMOJI_DATA_URL_LENGTH = 1000000;
 const MAX_POST_IMAGE_DATA_URL_LENGTH = 9000000;
 const MAX_CHAT_IMAGE_DATA_URL_LENGTH = 9000000;
+const MAX_ACCOUNT_IMPORT_COUNT = 120;
+const MAX_CHARACTER_IMPORT_COUNT = 200;
 
 const MIME = {
   ".html": "text/html; charset=utf-8",
@@ -842,6 +844,170 @@ function isAccountLoginTaken(state, value, ignoreId = "") {
   ));
 }
 
+function buildPlayerAccount(state, body, gmCreated) {
+  const name = String(body.name || body.displayName || body.username || "").trim();
+  if (!name) return { status: 400, error: "Account name is required." };
+  if (name.length > 40) return { status: 400, error: "Account name is too long." };
+  const passcode = normalizePasscode(body.passcode);
+  if (!passcode) return { status: 400, error: "Passcode must be 4 to 80 characters." };
+  const handle = normalizeHandle(body.handle, name);
+  if (state.characters.some((character) => character.handle.toLowerCase() === handle.toLowerCase())) {
+    return { status: 409, error: "That handle is already taken." };
+  }
+  if (isAccountLoginTaken(state, handle)) {
+    return { status: 409, error: "That handle conflicts with an account username." };
+  }
+  const username = normalizeUsername(body.username || handle, handle);
+  if (isAccountLoginTaken(state, username)) {
+    return { status: 409, error: "That username is already taken." };
+  }
+
+  let avatarData = "";
+  try {
+    avatarData = validateDataUrl(body.avatarData, MAX_AVATAR_DATA_URL_LENGTH, "Avatar");
+  } catch (error) {
+    return { status: 400, error: error.message };
+  }
+
+  const accessToken = crypto.randomBytes(24).toString("hex");
+  const salt = crypto.randomBytes(12).toString("hex");
+  const accountId = id("acct");
+  const character = makeCharacter(accountId, name, handle, "account");
+  character.username = username;
+  character.avatarData = avatarData;
+  character.accessToken = accessToken;
+  character.auth = { salt, passcodeHash: hashPasscode(passcode, salt) };
+  character.note = gmCreated ? "GM-created player account" : "Self-created player account";
+  if (gmCreated) character.tags = normalizeTags(body.tags);
+  return { character, accessToken, account: { accountId, name, username, handle, passcode } };
+}
+
+function addAccountToPublicChats(state, character) {
+  for (const chat of state.chats) {
+    if (chat.isPublic && !chat.memberIds.includes(character.id)) {
+      chat.memberIds.push(character.id);
+    }
+  }
+}
+
+function parseAccountImportText(text) {
+  const lines = String(text || "")
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter((line) => line && !line.startsWith("#"));
+
+  if (lines.length && isAccountImportHeader(lines[0])) lines.shift();
+
+  return lines.map((line, index) => {
+    const parts = parseDelimitedLine(line).map((part) => part.trim());
+    if (parts.length < 4) {
+      return { row: index + 1, error: "Each row needs display name, username, @handle, and password." };
+    }
+    return {
+      row: index + 1,
+      name: parts[0],
+      username: parts[1],
+      handle: parts[2],
+      passcode: parts[3],
+      tags: parts[4] ? parts[4].split(/[;；|]/).map((tag) => tag.trim()).filter(Boolean) : []
+    };
+  });
+}
+
+function buildGmCharacter(body) {
+  const name = String(body.name || "").trim();
+  if (!name) return { status: 400, error: "Character name is required." };
+  if (name.length > 80) return { status: 400, error: "Character name is too long." };
+  const character = makeCharacter(id("char"), name, body.handle || makeHandle(name), body.type === "player" ? "player" : "npc");
+  if (body.avatarData) {
+    try {
+      character.avatarData = validateDataUrl(body.avatarData, MAX_AVATAR_DATA_URL_LENGTH, "Avatar");
+    } catch (error) {
+      return { status: 400, error: error.message };
+    }
+  }
+  character.note = String(body.note || "").trim();
+  character.tags = normalizeTags(body.tags);
+  return { character };
+}
+
+function parseCharacterImportText(text) {
+  const lines = String(text || "")
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter((line) => line && !line.startsWith("#"));
+
+  if (lines.length && isCharacterImportHeader(lines[0])) lines.shift();
+
+  return lines.map((line, index) => {
+    const parts = parseDelimitedLine(line).map((part) => part.trim());
+    if (!parts[0]) return { row: index + 1, error: "Character name is required." };
+    return {
+      row: index + 1,
+      name: parts[0],
+      handle: parts[1] || makeHandle(parts[0]),
+      type: /^(player|pc|预设玩家角色|玩家)$/i.test(parts[2] || "") ? "player" : "npc",
+      tags: parts[3] ? parts[3].split(/[;；|]/).map((tag) => tag.trim()).filter(Boolean) : []
+    };
+  });
+}
+
+function isCharacterImportHeader(line) {
+  const parts = parseDelimitedLine(line).map((part) => part.trim().replace(/^@/, "").toLowerCase());
+  const first = parts[0] || "";
+  const second = parts[1] || "";
+  return (
+    first.includes("名称") ||
+    first.includes("名字") ||
+    first.includes("name") ||
+    second.includes("handle")
+  );
+}
+
+function isAccountImportHeader(line) {
+  const parts = parseDelimitedLine(line).map((part) => part.trim().replace(/^@/, "").toLowerCase());
+  const first = parts[0] || "";
+  const second = parts[1] || "";
+  const third = parts[2] || "";
+  const fourth = parts[3] || "";
+  if (third === "handle" || third.includes("handle")) return true;
+  return (
+    (first.includes("显示") || first.includes("name") || first.includes("display")) &&
+    (second.includes("用户名") || second.includes("username") || second.includes("login")) &&
+    (third.includes("handle") || third.includes("账号")) &&
+    (fourth.includes("密码") || fourth.includes("password") || fourth.includes("passcode"))
+  );
+}
+
+function parseDelimitedLine(line) {
+  const delimiter = line.includes("\t") ? "\t" : ",";
+  const parts = [];
+  let value = "";
+  let quoted = false;
+
+  for (let index = 0; index < line.length; index += 1) {
+    const char = line[index];
+    if (char === "\"") {
+      if (quoted && line[index + 1] === "\"") {
+        value += "\"";
+        index += 1;
+      } else {
+        quoted = !quoted;
+      }
+      continue;
+    }
+    if (!quoted && (char === delimiter || (delimiter === "," && char === "，"))) {
+      parts.push(value);
+      value = "";
+      continue;
+    }
+    value += char;
+  }
+
+  parts.push(value);
+  return parts;
+}
+
 function normalizeShortcode(value) {
   const shortcode = String(value || "").trim().replace(/^:+|:+$/g, "").toLowerCase();
   if (!/^[a-z0-9_\-]{1,24}$/.test(shortcode)) return "";
@@ -1029,60 +1195,86 @@ async function routeApi(req, res, url) {
     }
   }
 
-  if (req.method === "POST" && url.pathname === "/api/player-accounts") {
-    const gmCreated = isAdmin(req);
-    const name = String(body.name || body.displayName || body.username || "").trim();
-    if (!name) return sendJson(res, 400, { error: "Account name is required." });
-    if (name.length > 40) return sendJson(res, 400, { error: "Account name is too long." });
-    const passcode = normalizePasscode(body.passcode);
-    if (!passcode) return sendJson(res, 400, { error: "Passcode must be 4 to 80 characters." });
-    const handle = normalizeHandle(body.handle, name);
-    if (state.characters.some((character) => character.handle.toLowerCase() === handle.toLowerCase())) {
-      return sendJson(res, 409, { error: "That handle is already taken." });
-    }
-    if (isAccountLoginTaken(state, handle)) {
-      return sendJson(res, 409, { error: "That handle conflicts with an account username." });
-    }
-    const username = normalizeUsername(body.username || handle, handle);
-    if (isAccountLoginTaken(state, username)) {
-      return sendJson(res, 409, { error: "That username is already taken." });
+  if (req.method === "POST" && url.pathname === "/api/player-accounts/import") {
+    if (!requireAdmin(req, res)) return;
+    const rows = Array.isArray(body.accounts)
+      ? body.accounts.map((account, index) => ({ ...account, row: index + 1 }))
+      : parseAccountImportText(body.text);
+    if (!rows.length) return sendJson(res, 400, { error: "Import list is empty." });
+    if (rows.length > MAX_ACCOUNT_IMPORT_COUNT) return sendJson(res, 400, { error: `Import up to ${MAX_ACCOUNT_IMPORT_COUNT} accounts at a time.` });
+
+    const workingState = JSON.parse(JSON.stringify(state));
+    const created = [];
+    for (const row of rows) {
+      if (row.error) return sendJson(res, 400, { error: `Row ${row.row}: ${row.error}` });
+      const built = buildPlayerAccount(workingState, row, true);
+      if (built.error) return sendJson(res, built.status, { error: `Row ${row.row}: ${built.error}` });
+      workingState.characters.push(built.character);
+      addAccountToPublicChats(workingState, built.character);
+      created.push(built.account);
     }
 
-    let avatarData = "";
-    try {
-      avatarData = validateDataUrl(body.avatarData, MAX_AVATAR_DATA_URL_LENGTH, "Avatar");
-    } catch (error) {
-      return sendJson(res, 400, { error: error.message });
-    }
-
-    const accessToken = crypto.randomBytes(24).toString("hex");
-    const salt = crypto.randomBytes(12).toString("hex");
-    const accountId = id("acct");
-    const character = makeCharacter(accountId, name, handle, "account");
-    character.username = username;
-    character.avatarData = avatarData;
-    character.accessToken = accessToken;
-    character.auth = { salt, passcodeHash: hashPasscode(passcode, salt) };
-    character.note = gmCreated ? "GM-created player account" : "Self-created player account";
-    if (gmCreated) character.tags = normalizeTags(body.tags);
-
-    if (gmCreated) {
-      pushUndo(state, "create_player_account", `创建玩家账号：${name}`, ["characters", "chats"], { accountId, handle, username });
-    }
-
-    state.characters.push(character);
-
-    for (const chat of state.chats) {
-      if (chat.isPublic && !chat.memberIds.includes(character.id)) {
-        chat.memberIds.push(character.id);
-      }
-    }
+    pushUndo(state, "import_player_accounts", `批量导入玩家账号：${created.length} 个`, ["characters", "chats"], { count: created.length });
+    state.characters = workingState.characters;
+    state.chats = workingState.chats;
 
     writeState(state);
     sendJson(res, 201, {
       state: publicState(state),
-      accountId: character.id,
-      accountToken: accessToken
+      created
+    });
+    return;
+  }
+
+  if (req.method === "DELETE" && url.pathname === "/api/player-accounts") {
+    if (!requireAdmin(req, res)) return;
+    const requestedIds = body.all === true
+      ? state.characters.filter((character) => character.type === "account" && character.active !== false).map((character) => character.id)
+      : unique(Array.isArray(body.ids) ? body.ids.map(String) : []);
+    const accounts = requestedIds
+      .map((accountId) => state.characters.find((character) => character.id === accountId && character.type === "account" && character.active !== false))
+      .filter(Boolean);
+    if (!accounts.length) return sendJson(res, 400, { error: "No active player accounts selected." });
+
+    pushUndo(state, "delete_player_accounts", `批量删除玩家账号：${accounts.length} 个`, ["characters", "chats", "relationships"], { count: accounts.length, accountIds: accounts.map((account) => account.id) });
+    const accountIds = new Set(accounts.map((account) => account.id));
+    const now = new Date().toISOString();
+    for (const account of accounts) {
+      account.active = false;
+      account.deletedAt = now;
+    }
+    for (const chat of state.chats) {
+      chat.memberIds = (chat.memberIds || []).filter((memberId) => !accountIds.has(memberId));
+    }
+    state.relationships = (state.relationships || []).filter((relationship) => (
+      !accountIds.has(relationship.requesterId) && !accountIds.has(relationship.targetId)
+    ));
+
+    writeState(state);
+    sendJson(res, 200, {
+      state: publicState(state),
+      deleted: accounts.map((account) => ({ id: account.id, name: account.name, handle: account.handle, username: account.username }))
+    });
+    return;
+  }
+
+  if (req.method === "POST" && url.pathname === "/api/player-accounts") {
+    const gmCreated = isAdmin(req);
+    const built = buildPlayerAccount(state, body, gmCreated);
+    if (built.error) return sendJson(res, built.status, { error: built.error });
+
+    if (gmCreated) {
+      pushUndo(state, "create_player_account", `创建玩家账号：${built.character.name}`, ["characters", "chats"], { accountId: built.character.id, handle: built.character.handle, username: built.character.username });
+    }
+
+    state.characters.push(built.character);
+    addAccountToPublicChats(state, built.character);
+
+    writeState(state);
+    sendJson(res, 201, {
+      state: publicState(state),
+      accountId: built.character.id,
+      accountToken: built.accessToken
     });
     return;
   }
@@ -1361,22 +1553,37 @@ async function routeApi(req, res, url) {
     return;
   }
 
+  if (req.method === "POST" && url.pathname === "/api/characters/import") {
+    if (!requireAdmin(req, res)) return;
+    const rows = Array.isArray(body.characters)
+      ? body.characters.map((character, index) => ({ ...character, row: index + 1 }))
+      : parseCharacterImportText(body.text);
+    if (!rows.length) return sendJson(res, 400, { error: "Import list is empty." });
+    if (rows.length > MAX_CHARACTER_IMPORT_COUNT) return sendJson(res, 400, { error: `Import up to ${MAX_CHARACTER_IMPORT_COUNT} characters at a time.` });
+
+    const created = [];
+    const newCharacters = [];
+    for (const row of rows) {
+      if (row.error) return sendJson(res, 400, { error: `Row ${row.row}: ${row.error}` });
+      const built = buildGmCharacter(row);
+      if (built.error) return sendJson(res, built.status, { error: `Row ${row.row}: ${built.error}` });
+      newCharacters.push(built.character);
+      created.push({ id: built.character.id, name: built.character.name, handle: built.character.handle, type: built.character.type, tags: built.character.tags });
+    }
+
+    pushUndo(state, "import_characters", `批量创建角色：${created.length} 个`, ["characters"], { count: created.length });
+    state.characters.push(...newCharacters);
+    writeState(state);
+    sendJson(res, 201, { state: publicState(state), created });
+    return;
+  }
+
   if (req.method === "POST" && url.pathname === "/api/characters") {
     if (!requireAdmin(req, res)) return;
-    const name = String(body.name || "").trim();
-    if (!name) return sendJson(res, 400, { error: "Character name is required." });
-    pushUndo(state, "create_character", `创建角色：${name}`, ["characters"]);
-    const character = makeCharacter(id("char"), name, body.handle || makeHandle(name), body.type === "player" ? "player" : "npc");
-    if (body.avatarData) {
-      try {
-        character.avatarData = validateDataUrl(body.avatarData, MAX_AVATAR_DATA_URL_LENGTH, "Avatar");
-      } catch (error) {
-        return sendJson(res, 400, { error: error.message });
-      }
-    }
-    character.note = String(body.note || "").trim();
-    character.tags = normalizeTags(body.tags);
-    state.characters.push(character);
+    const built = buildGmCharacter(body);
+    if (built.error) return sendJson(res, built.status, { error: built.error });
+    pushUndo(state, "create_character", `创建角色：${built.character.name}`, ["characters"]);
+    state.characters.push(built.character);
     writeState(state);
     sendJson(res, 201, publicState(state));
     return;

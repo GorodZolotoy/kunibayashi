@@ -9,6 +9,7 @@ const stateBag = {
   profileId: "",
   privateChatOpen: false,
   lastGmCreatedAccount: null,
+  lastGmImportedAccounts: [],
   gmPin: localStorage.getItem("kokubayashi.gmPin") || "",
   accountTokens: readAccountTokens(),
   gmUnlocked: localStorage.getItem("kokubayashi.gmUnlocked") === "true"
@@ -67,14 +68,15 @@ function bindGlobalEvents() {
       "account-avatar": "未选择头像",
       "avatar-update-file": "未选择头像",
       "gm-account-avatar": "未选择头像",
+      "new-character-avatar": "未选择头像",
       "emoji-file": "未选择图片"
     };
     if (event.target?.id && imageHints[event.target.id]) {
       const hint = document.getElementById(`${event.target.id}-hint`);
       if (hint) hint.textContent = event.target.files?.[0]?.name || imageHints[event.target.id];
     }
-    if (event.target?.classList?.contains("account-avatar-input")) {
-      const hint = document.getElementById(`account-avatar-hint-${event.target.dataset.characterId}`);
+    if (event.target?.classList?.contains("character-avatar-input")) {
+      const hint = document.getElementById(`character-avatar-hint-${event.target.dataset.characterId}`);
       if (hint) hint.textContent = event.target.files?.[0]?.name || "未选择头像";
     }
     if (event.target?.id === "gm-schedule-day") {
@@ -136,8 +138,14 @@ async function handleAction(target) {
   if (action === "lock-gm") return lockGm();
   if (action === "save-settings") return saveSettings();
   if (action === "create-character") return createCharacter();
+  if (action === "import-characters") return importCharacters();
   if (action === "create-gm-player-account") return createGmPlayerAccount();
-  if (action === "update-account-avatar") return updateAccountAvatar(target.dataset.characterId);
+  if (action === "import-player-accounts") return importPlayerAccounts();
+  if (action === "select-all-player-accounts") return setPlayerAccountSelection(true);
+  if (action === "clear-player-account-selection") return setPlayerAccountSelection(false);
+  if (action === "delete-selected-player-accounts") return deleteSelectedPlayerAccounts();
+  if (action === "delete-all-player-accounts") return deleteAllPlayerAccounts();
+  if (action === "update-account-avatar" || action === "update-character-avatar") return updateCharacterAvatar(target.dataset.characterId);
   if (action === "save-character-tags") return saveCharacterTags(target.dataset.characterId);
   if (action === "delete-character") return deleteCharacter(target.dataset.characterId);
   if (action === "create-chat") return createChat();
@@ -218,9 +226,9 @@ function canAutoRender() {
 }
 
 function hasPendingFileSelection() {
-  return ["post-image", "message-image", "account-avatar", "avatar-update-file", "gm-account-avatar", "emoji-file"]
+  return ["post-image", "message-image", "account-avatar", "avatar-update-file", "gm-account-avatar", "new-character-avatar", "emoji-file"]
     .some((id) => (document.getElementById(id)?.files?.length || 0) > 0)
-    || Array.from(document.querySelectorAll(".account-avatar-input")).some((input) => (input.files?.length || 0) > 0);
+    || Array.from(document.querySelectorAll(".character-avatar-input")).some((input) => (input.files?.length || 0) > 0);
 }
 
 function hasDraftText() {
@@ -231,6 +239,7 @@ function hasDraftText() {
     "#private-chat-name",
     "#new-chat-name",
     "#new-character-name",
+    "#character-import-text",
     "#account-name",
     "#account-handle",
     "#account-passcode",
@@ -241,6 +250,7 @@ function hasDraftText() {
     "#gm-account-handle",
     "#gm-account-passcode",
     "#gm-account-tags",
+    "#account-import-text",
     "#emoji-shortcode",
     "#calendar-date-label",
     "#calendar-note",
@@ -267,6 +277,15 @@ function renderShell() {
   });
 
   const actors = availableActors();
+  if (!stateBag.gmUnlocked && stateBag.actorId && !actors.some((actor) => actor.id === stateBag.actorId)) {
+    stateBag.actorId = "";
+    localStorage.removeItem("kokubayashi.actorId");
+  }
+  const hideIdentityPicker = !stateBag.gmUnlocked;
+  const identityLabel = document.querySelector("label[for='actor-select']");
+  if (identityLabel) identityLabel.hidden = hideIdentityPicker;
+  els.actorSelect.hidden = hideIdentityPicker;
+  els.actorPreview.hidden = hideIdentityPicker;
   els.actorSelect.innerHTML = actors.length
     ? `${stateBag.gmUnlocked ? "" : `<option value="">未选择账号</option>`}${actors.map((actor) => `<option value="${actor.id}">${escapeHtml(actor.name)} ${escapeHtml(actor.handle)}</option>`).join("")}`
     : `<option value="">创建玩家账号后使用</option>`;
@@ -1104,6 +1123,7 @@ function renderGmEditLog() {
 function renderGmPlayerAccountManager(chars) {
   const accounts = chars.filter((character) => character.type === "account");
   const recent = stateBag.lastGmCreatedAccount;
+  const imported = stateBag.lastGmImportedAccounts || [];
   return `
     <section class="gm-wide">
       <div class="section-title">玩家账号管理</div>
@@ -1135,12 +1155,42 @@ function renderGmPlayerAccountManager(chars) {
               <div>初始密码：<code>${escapeHtml(recent.passcode)}</code></div>
             </div>
           ` : ""}
+          ${imported.length ? `
+            <div class="credential-card">
+              <div class="mini-title">刚批量导入的登录信息</div>
+              <div class="credential-list">
+                ${imported.map((account) => `
+                  <div class="credential-row">
+                    <strong>${escapeHtml(account.name)}</strong>
+                    <span>用户名：<code>${escapeHtml(account.username)}</code></span>
+                    <span>@handle：<code>${escapeHtml(account.handle)}</code></span>
+                    <span>初始密码：<code>${escapeHtml(account.passcode)}</code></span>
+                  </div>
+                `).join("")}
+              </div>
+            </div>
+          ` : ""}
+          <div class="account-import-box">
+            <div class="mini-title">批量导入</div>
+            <textarea id="account-import-text" class="account-import-text" placeholder="显示名,登录用户名,@handle,初始密码,标签&#10;三渡 七海,nanami,@nanami,pass123,1-A;新闻部"></textarea>
+            <div class="hint">每行一个账号。可加表头；标签可选，用分号分隔。</div>
+            <button class="secondary-button" type="button" data-action="import-player-accounts">批量导入账号</button>
+          </div>
         </div>
         <div class="account-list-panel">
-          <div class="mini-title">所有玩家账号</div>
+          <div class="account-list-toolbar">
+            <div class="mini-title">所有玩家账号</div>
+            <div class="row-actions">
+              <button class="secondary-button compact-action" type="button" data-action="select-all-player-accounts" ${accounts.length ? "" : "disabled"}>全选</button>
+              <button class="secondary-button compact-action" type="button" data-action="clear-player-account-selection" ${accounts.length ? "" : "disabled"}>清空</button>
+              <button class="danger-button compact-action" type="button" data-action="delete-selected-player-accounts" ${accounts.length ? "" : "disabled"}>删除选中</button>
+              <button class="danger-button compact-action" type="button" data-action="delete-all-player-accounts" ${accounts.length ? "" : "disabled"}>删除全部</button>
+            </div>
+          </div>
           <div class="account-list">
             ${accounts.map((account) => `
               <div class="account-list-row">
+                <input class="account-delete-checkbox" type="checkbox" value="${escapeAttr(account.id)}" aria-label="选择 ${escapeAttr(account.name)}">
                 ${renderAvatar(account)}
                 <div class="name-block">
                   <div class="name">${escapeHtml(account.name)}</div>
@@ -1238,7 +1288,19 @@ function renderGm() {
               <option value="player">预设玩家角色</option>
             </select>
           </label>
+          <div class="form-row">
+            <label class="file-picker">头像
+              <input id="new-character-avatar" type="file" accept="image/*">
+            </label>
+            <span id="new-character-avatar-hint" class="hint">未选择头像</span>
+          </div>
           <button class="primary-button" type="button" data-action="create-character">创建角色</button>
+          <div class="account-import-box">
+            <div class="mini-title">批量创建角色</div>
+            <textarea id="character-import-text" class="account-import-text" placeholder="名称,@handle,类型,标签&#10;三渡 七海,@nanami,npc,1-A;新闻部&#10;玩家预设A,@pc_a,player,PC;1-A"></textarea>
+            <div class="hint">每行一个角色。类型填 npc 或 player；标签可选，用分号分隔。</div>
+            <button class="secondary-button" type="button" data-action="import-characters">批量创建角色</button>
+          </div>
         </div>
       </section>
 
@@ -1281,15 +1343,13 @@ function renderGm() {
                 <input id="character-tags-${escapeAttr(character.id)}" value="${escapeAttr(characterTagInputValue(character))}" placeholder="标签，用逗号分隔">
                 <button class="secondary-button compact-action" type="button" data-action="save-character-tags" data-character-id="${escapeAttr(character.id)}">保存标签</button>
                 <button class="danger-button compact-action" type="button" data-action="delete-character" data-character-id="${escapeAttr(character.id)}">删除</button>
-                ${character.type === "account" ? `
-                  <div class="avatar-editor">
-                    <label class="file-picker compact-file-picker">头像
-                      <input id="account-avatar-${escapeAttr(character.id)}" class="account-avatar-input" data-character-id="${escapeAttr(character.id)}" type="file" accept="image/*">
-                    </label>
-                    <span id="account-avatar-hint-${escapeAttr(character.id)}" class="hint avatar-hint">未选择头像</span>
-                    <button class="secondary-button compact-action" type="button" data-action="update-account-avatar" data-character-id="${escapeAttr(character.id)}">更新头像</button>
-                  </div>
-                ` : ""}
+                <div class="avatar-editor">
+                  <label class="file-picker compact-file-picker">头像
+                    <input id="character-avatar-${escapeAttr(character.id)}" class="character-avatar-input" data-character-id="${escapeAttr(character.id)}" type="file" accept="image/*">
+                  </label>
+                  <span id="character-avatar-hint-${escapeAttr(character.id)}" class="hint avatar-hint">未选择头像</span>
+                  <button class="secondary-button compact-action" type="button" data-action="update-character-avatar" data-character-id="${escapeAttr(character.id)}">更新头像</button>
+                </div>
               </div>
             </div>
           `).join("")}
@@ -1661,6 +1721,8 @@ async function gmUndo() {
 async function createCharacter() {
   const name = document.getElementById("new-character-name")?.value.trim();
   if (!name) return showNotice("角色名为空。");
+  const avatarFile = document.getElementById("new-character-avatar")?.files?.[0];
+  const avatarData = avatarFile ? await fileToImageDataUrl(avatarFile, 384, 0.88, 2300000) : "";
   await api("/api/characters", {
     method: "POST",
     admin: true,
@@ -1668,10 +1730,24 @@ async function createCharacter() {
       name,
       handle: document.getElementById("new-character-handle")?.value,
       type: document.getElementById("new-character-type")?.value,
-      tags: parseTagInput(document.getElementById("new-character-tags")?.value)
+      tags: parseTagInput(document.getElementById("new-character-tags")?.value),
+      avatarData
     }
   });
   await refresh(true);
+}
+
+async function importCharacters() {
+  const text = document.getElementById("character-import-text")?.value.trim();
+  if (!text) return showNotice("批量创建角色内容为空。");
+  const result = await api("/api/characters/import", {
+    method: "POST",
+    admin: true,
+    body: { text }
+  });
+  stateBag.data = result.state;
+  showNotice(`已创建 ${result.created?.length || 0} 个角色。`);
+  render();
 }
 
 async function createGmPlayerAccount() {
@@ -1706,16 +1782,75 @@ async function createGmPlayerAccount() {
     handle: handle.startsWith("@") ? handle : `@${handle}`,
     passcode
   };
+  stateBag.lastGmImportedAccounts = [];
   showNotice(`玩家账号已创建：${username} / ${handle.startsWith("@") ? handle : `@${handle}`}`);
   render();
 }
 
-async function updateAccountAvatar(characterId) {
+async function importPlayerAccounts() {
+  const text = document.getElementById("account-import-text")?.value.trim();
+  if (!text) return showNotice("批量导入内容为空。");
+  const result = await api("/api/player-accounts/import", {
+    method: "POST",
+    admin: true,
+    body: { text }
+  });
+  stateBag.data = result.state;
+  stateBag.lastGmCreatedAccount = null;
+  stateBag.lastGmImportedAccounts = result.created || [];
+  showNotice(`已导入 ${result.created?.length || 0} 个玩家账号。`);
+  render();
+}
+
+function setPlayerAccountSelection(selected) {
+  document.querySelectorAll(".account-delete-checkbox").forEach((checkbox) => {
+    checkbox.checked = selected;
+  });
+}
+
+function selectedPlayerAccountIds() {
+  return Array.from(document.querySelectorAll(".account-delete-checkbox:checked"))
+    .map((checkbox) => checkbox.value)
+    .filter(Boolean);
+}
+
+async function deleteSelectedPlayerAccounts() {
+  const ids = selectedPlayerAccountIds();
+  if (!ids.length) return showNotice("请选择要删除的玩家账号。");
+  if (!window.confirm(`删除选中的 ${ids.length} 个玩家账号？历史消息会保留，GM 撤销可以恢复。`)) return;
+  const result = await api("/api/player-accounts", {
+    method: "DELETE",
+    admin: true,
+    body: { ids }
+  });
+  stateBag.data = result.state;
+  stateBag.lastGmCreatedAccount = null;
+  stateBag.lastGmImportedAccounts = [];
+  showNotice(`已删除 ${result.deleted?.length || ids.length} 个玩家账号。`);
+  render();
+}
+
+async function deleteAllPlayerAccounts() {
+  const accounts = (stateBag.data?.characters || []).filter((character) => character.type === "account" && character.active !== false);
+  if (!accounts.length) return showNotice("没有可删除的玩家账号。");
+  if (!window.confirm(`删除全部 ${accounts.length} 个玩家账号？历史消息会保留，GM 撤销可以恢复。`)) return;
+  const result = await api("/api/player-accounts", {
+    method: "DELETE",
+    admin: true,
+    body: { all: true }
+  });
+  stateBag.data = result.state;
+  stateBag.lastGmCreatedAccount = null;
+  stateBag.lastGmImportedAccounts = [];
+  showNotice(`已删除 ${result.deleted?.length || accounts.length} 个玩家账号。`);
+  render();
+}
+
+async function updateCharacterAvatar(characterId) {
   if (!characterId) return;
   const character = getActor(characterId);
   if (!character) return;
-  if (character.type !== "account") return showNotice("只有玩家账号可以用这个头像更新入口。");
-  const file = document.getElementById(`account-avatar-${characterId}`)?.files?.[0];
+  const file = document.getElementById(`character-avatar-${characterId}`)?.files?.[0];
   if (!file) return showNotice("请选择头像图片。");
   const avatarData = await fileToImageDataUrl(file, 384, 0.88, 2300000);
   stateBag.data = await api(`/api/characters/${encodeURIComponent(characterId)}`, {
@@ -2223,7 +2358,9 @@ function relationshipStatus(targetId) {
 }
 
 function currentActor() {
-  return getActor(stateBag.actorId);
+  if (!stateBag.actorId) return null;
+  if (stateBag.gmUnlocked) return getActor(stateBag.actorId);
+  return availableActors().find((actor) => actor.id === stateBag.actorId) || null;
 }
 
 function getActor(id) {
