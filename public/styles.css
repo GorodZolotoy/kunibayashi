@@ -1649,3 +1649,95 @@ select:focus {
     width: 100%;
   }
 }
+
+/* QOL: profile/account readability over abstract school blocks */
+.identity-panel {
+  background:
+    linear-gradient(137deg, rgba(255, 248, 226, 0.06) 0 22%, transparent 22%),
+    rgba(18, 35, 28, 0.88);
+  border-color: rgba(255, 248, 226, 0.28);
+  box-shadow: inset 0 1px 0 rgba(255, 248, 226, 0.08), 0 16px 34px rgba(0, 0, 0, 0.12);
+  overflow: hidden;
+}
+
+.identity-panel::after {
+  content: "";
+  position: absolute;
+  inset: auto -28px -36px auto;
+  width: 128px;
+  height: 170px;
+  background: rgba(146, 183, 107, 0.16);
+  transform: skewX(-22deg);
+  pointer-events: none;
+}
+
+.identity-panel > * {
+  position: relative;
+  z-index: 1;
+}
+
+.identity-panel .actor-preview {
+  padding: 8px;
+  border: 1px solid rgba(255, 248, 226, 0.12);
+  border-radius: var(--radius);
+  background: rgba(8, 20, 15, 0.36);
+}
+
+.identity-panel .name {
+  color: #fff8e2;
+}
+
+.identity-panel .handle,
+.identity-panel .hint,
+.identity-panel label {
+  color: rgba(255, 248, 226, 0.82);
+}
+
+.identity-panel .mini-form {
+  border-top-color: rgba(255, 248, 226, 0.22);
+}
+
+.profile-modal {
+  background: var(--surface);
+}
+
+.profile-hero {
+  position: relative;
+  isolation: isolate;
+  background:
+    linear-gradient(112deg, var(--school-green) 0 72%, var(--night) 72% 100%);
+  color: var(--cream);
+  overflow: hidden;
+}
+
+.profile-hero::after {
+  content: "";
+  position: absolute;
+  inset: 0 0 0 auto;
+  z-index: -1;
+  width: 34%;
+  background:
+    linear-gradient(132deg, transparent 0 28%, rgba(255, 248, 226, 0.18) 28% 42%, transparent 42%),
+    linear-gradient(132deg, transparent 0 58%, rgba(146, 183, 107, 0.18) 58% 100%);
+}
+
+.profile-heading {
+  padding: 8px 10px;
+  border-radius: var(--radius);
+  background: rgba(18, 35, 28, 0.38);
+  box-shadow: inset 0 0 0 1px rgba(255, 248, 226, 0.08);
+}
+
+.profile-name {
+  color: #fff8e2;
+  text-shadow: 0 1px 2px rgba(18, 35, 28, 0.35);
+}
+
+.profile-handle {
+  color: rgba(255, 248, 226, 0.9);
+}
+
+.profile-close {
+  background: #fff8e2;
+  color: var(--night);
+}
