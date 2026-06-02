@@ -106,6 +106,7 @@ async function handleAction(target) {
   if (action === "publish-post") return publishPost();
   if (action === "like-post") return likePost(target.dataset.postId);
   if (action === "reply-post") return replyPost(target.dataset.postId);
+  if (action === "delete-reply") return deleteReply(target.dataset.postId, target.dataset.replyId);
   if (action === "save-post") return savePost(target.dataset.postId);
   if (action === "delete-post") return deletePost(target.dataset.postId);
   if (action === "delete-message") return deleteMessage(target.dataset.messageId);
@@ -364,7 +365,7 @@ function renderPost(post) {
         <span>转发 ${post.metrics.reposts}</span>
         <span>浏览 ${post.metrics.views}</span>
       </div>
-      ${replies.length ? `<div class="reply-list">${replies.map(renderReply).join("")}</div>` : ""}
+      ${replies.length ? `<div class="reply-list">${replies.map((reply) => renderReply(post.id, reply)).join("")}</div>` : ""}
       <div class="reply-composer">
         <textarea id="reply-${post.id}" maxlength="240" placeholder="回复"></textarea>
         ${renderEmojiBar(`reply-${post.id}`)}
@@ -377,19 +378,22 @@ function renderPost(post) {
   `;
 }
 
-function renderReply(reply) {
+function renderReply(postId, reply) {
   const author = getActor(reply.authorId);
   return `
     <div class="reply">
       <button class="profile-avatar-button" type="button" data-action="view-profile" data-character-id="${author?.id || ""}" ${author ? "" : "disabled"}>
         ${renderAvatar(author)}
       </button>
-      <div>
+      <div class="reply-body">
         <div class="meta">
           <button class="inline-profile-link" type="button" data-action="view-profile" data-character-id="${author?.id || ""}" ${author ? "" : "disabled"}>
             <strong>${escapeHtml(author?.name || "未知")}</strong>
           </button>
           · ${escapeHtml(reply.gameTime)}
+          ${canDeleteReply(reply) ? `
+            <button class="danger-button reply-delete" type="button" data-action="delete-reply" data-post-id="${escapeAttr(postId)}" data-reply-id="${escapeAttr(reply.id)}">删除</button>
+          ` : ""}
         </div>
         <div class="reply-content">${formatText(reply.content)}</div>
       </div>
@@ -1212,6 +1216,16 @@ async function replyPost(postId) {
   await refresh(true);
 }
 
+async function deleteReply(postId, replyId) {
+  if (!postId || !replyId) return;
+  await api(`/api/feed/posts/${encodeURIComponent(postId)}/replies/${encodeURIComponent(replyId)}`, {
+    method: "DELETE",
+    body: { actorId: stateBag.actorId }
+  });
+  showNotice("回复已删除。需要的话可以用 GM 撤销。");
+  await refresh(true);
+}
+
 async function savePost(postId) {
   const likes = document.getElementById(`post-likes-${postId}`)?.value;
   const reposts = document.getElementById(`post-reposts-${postId}`)?.value;
@@ -1775,6 +1789,12 @@ function canDeleteChat(chat) {
   if (!chat) return false;
   if (stateBag.gmUnlocked) return true;
   return chat.isPublic !== true && chat.createdBy === stateBag.actorId;
+}
+
+function canDeleteReply(reply) {
+  if (!reply) return false;
+  if (stateBag.gmUnlocked) return true;
+  return reply.authorId === stateBag.actorId;
 }
 
 function contactCandidates() {

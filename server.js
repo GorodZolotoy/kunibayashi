@@ -1519,6 +1519,32 @@ async function routeApi(req, res, url) {
     return;
   }
 
+  const replyMatch = url.pathname.match(/^\/api\/feed\/posts\/([^/]+)\/replies\/([^/]+)$/);
+  if (replyMatch) {
+    const postId = decodeURIComponent(replyMatch[1]);
+    const replyId = decodeURIComponent(replyMatch[2]);
+    const post = state.posts.find((item) => item.id === postId);
+    if (!post) return sendJson(res, 404, { error: "Post not found." });
+    if (req.method !== "DELETE") return sendJson(res, 404, { error: "API route not found." });
+
+    post.replies ||= [];
+    const reply = post.replies.find((item) => item.id === replyId);
+    if (!reply) return sendJson(res, 404, { error: "Reply not found." });
+
+    if (!isAdmin(req)) {
+      const actor = authorizeAuthor(req, res, state, body.actorId || body.authorId || body.requesterId);
+      if (!actor) return;
+      if (reply.authorId !== actor.id) return sendJson(res, 403, { error: "Only the reply author or GM can delete this reply." });
+    }
+
+    const author = findCharacter(state, reply.authorId);
+    pushUndo(state, "delete_reply", `删除回复：${author?.name || "Unknown"}`, ["posts"], { postId, replyId, authorId: reply.authorId });
+    post.replies = post.replies.filter((item) => item.id !== replyId);
+    writeState(state);
+    sendJson(res, 200, publicState(state));
+    return;
+  }
+
   const postMatch = url.pathname.match(/^\/api\/feed\/posts\/([^/]+)(?:\/([^/]+))?$/);
   if (postMatch) {
     const postId = decodeURIComponent(postMatch[1]);
