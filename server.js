@@ -240,6 +240,7 @@ function normalizeState(state) {
   }
 
   for (const message of state.messages) {
+    message.isAnonymous = message.isAnonymous === true;
     if (message.imageData && !message.attachment) {
       message.attachment = { type: "image", dataUrl: message.imageData, name: "image" };
       delete message.imageData;
@@ -695,11 +696,17 @@ function publicState(state) {
       ? (day.events || [])
       : (day.events || []).filter((event) => event.isPublic || event.triggeredAt)
   }));
+  const messages = (state.messages || []).map((message) => (
+    !adminView && message.isAnonymous
+      ? { ...message, authorId: "" }
+      : message
+  ));
 
   return {
     ...state,
     characters: state.characters.map(({ accessToken, auth, ...character }) => character),
     calendarDays,
+    messages,
     bulletins: adminView ? state.bulletins : (state.bulletins || []).filter((bulletin) => bulletin.isPublic !== false),
     auditLog: adminView ? (state.auditLog || []) : [],
     undoStack: adminView
@@ -1586,6 +1593,28 @@ async function routeApi(req, res, url) {
     return;
   }
 
+  if (req.method === "DELETE" && url.pathname.startsWith("/api/chats/")) {
+    const chatId = decodeURIComponent(url.pathname.split("/").pop());
+    const chat = state.chats.find((item) => item.id === chatId);
+    if (!chat) return sendJson(res, 404, { error: "Chat not found." });
+
+    let actor = null;
+    if (!isAdmin(req)) {
+      actor = authorizeAuthor(req, res, state, body.actorId || body.authorId || body.requesterId);
+      if (!actor) return;
+      if (chat.isPublic || chat.createdBy !== actor.id) {
+        return sendJson(res, 403, { error: "Only the creator or GM can delete this chat." });
+      }
+    }
+
+    pushUndo(state, "delete_chat", `删除聊天：${chat.name}`, ["chats", "messages"], { chatId, actorId: actor?.id || "" });
+    state.chats = state.chats.filter((item) => item.id !== chat.id);
+    state.messages = state.messages.filter((message) => message.chatId !== chat.id);
+    writeState(state);
+    sendJson(res, 200, publicState(state));
+    return;
+  }
+
   if (req.method === "PATCH" && url.pathname.startsWith("/api/chats/")) {
     if (!requireAdmin(req, res)) return;
     const chatId = decodeURIComponent(url.pathname.split("/").pop());
@@ -1628,6 +1657,7 @@ async function routeApi(req, res, url) {
       id: id("msg"),
       chatId: chat.id,
       authorId: author.id,
+      isAnonymous: body.isAnonymous === true,
       content,
       attachment,
       gameTime: String(body.gameTime || state.settings.gameTime).trim(),
@@ -1749,7 +1779,10 @@ function exportMarkdown(state) {
     const messages = state.messages.filter((message) => message.chatId === chat.id).sort((a, b) => String(a.createdAt).localeCompare(String(b.createdAt)));
     for (const message of messages) {
       const author = byId.get(message.authorId);
-      lines.push(`- ${message.gameTime} | ${author?.name || "Unknown"}：${message.content}`);
+      const authorLabel = message.isAnonymous
+        ? `匿名${author ? `（${author.name}）` : ""}`
+        : (author?.name || "Unknown");
+      lines.push(`- ${message.gameTime} | ${authorLabel}：${message.content}`);
       if (message.attachment?.type === "image") {
         lines.push(`  - [图片] ${message.attachment.name || "image"}`);
       }

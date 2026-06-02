@@ -109,6 +109,7 @@ async function handleAction(target) {
   if (action === "save-post") return savePost(target.dataset.postId);
   if (action === "delete-post") return deletePost(target.dataset.postId);
   if (action === "delete-message") return deleteMessage(target.dataset.messageId);
+  if (action === "delete-chat") return deleteChat(target.dataset.chatId);
   if (action === "open-gm-chat") return openGmChat(target.dataset.chatId);
   if (action === "open-gm-feed") return setTab("feed");
   if (action === "publish-bulletin") return publishBulletin();
@@ -448,6 +449,7 @@ function renderChats() {
             <div class="section-title">${escapeHtml(active?.name || "聊天")}</div>
             <div class="meta member-links">${renderMemberProfileLinks(active)}</div>
           </div>
+          ${canDeleteChat(active) ? `<button class="danger-button compact-action" type="button" data-action="delete-chat" data-chat-id="${escapeAttr(active.id)}">删除聊天</button>` : ""}
         </header>
         <div class="messages" id="messages">
           ${messages.map(renderMessage).join("") || `<div class="hint">这里还没有消息。</div>`}
@@ -456,6 +458,10 @@ function renderChats() {
           <textarea id="message-content" maxlength="500" placeholder="发送消息"></textarea>
           <div class="message-tools">
             ${renderEmojiBar("message-content")}
+            <label class="checkbox-line compact-checkbox">
+              <input id="message-anonymous" type="checkbox">
+              <span>匿名发送</span>
+            </label>
             <label class="file-picker">图片
               <input id="message-image" type="file" accept="image/*">
             </label>
@@ -472,19 +478,24 @@ function renderChats() {
 }
 
 function renderMessage(message) {
+  const isAnonymous = message.isAnonymous === true;
   const author = getActor(message.authorId);
-  const mine = author?.id === stateBag.actorId;
+  const profileId = isAnonymous && !stateBag.gmUnlocked ? "" : author?.id || "";
+  const displayName = isAnonymous
+    ? (stateBag.gmUnlocked && author ? `匿名（${author.name}）` : "匿名")
+    : (author?.name || "未知");
+  const mine = !isAnonymous && author?.id === stateBag.actorId;
   const hasImage = message.attachment?.type === "image";
   const hasText = Boolean(String(message.content || "").trim());
   return `
     <div class="message-row ${mine ? "mine" : ""} ${hasImage ? "with-image" : ""}">
-      <button class="profile-avatar-button" type="button" data-action="view-profile" data-character-id="${author?.id || ""}" ${author ? "" : "disabled"}>
-        ${renderAvatar(author)}
+      <button class="profile-avatar-button" type="button" data-action="view-profile" data-character-id="${profileId}" ${profileId ? "" : "disabled"}>
+        ${isAnonymous ? renderAnonymousAvatar() : renderAvatar(author)}
       </button>
       <div class="message-bubble ${hasImage ? "has-attachment" : ""} ${hasImage && !hasText ? "image-only" : ""}">
         <div class="meta">
-          <button class="inline-profile-link" type="button" data-action="view-profile" data-character-id="${author?.id || ""}" ${author ? "" : "disabled"}>
-            <strong>${escapeHtml(author?.name || "未知")}</strong>
+          <button class="inline-profile-link" type="button" data-action="view-profile" data-character-id="${profileId}" ${profileId ? "" : "disabled"}>
+            <strong>${escapeHtml(displayName)}</strong>
           </button>
           · ${escapeHtml(message.gameTime)}
         </div>
@@ -1233,6 +1244,23 @@ async function deleteMessage(messageId) {
   await refresh(true);
 }
 
+async function deleteChat(chatId) {
+  const chat = getChat(chatId);
+  if (!chat) return;
+  if (!window.confirm(`删除聊天「${chat.name}」？这个聊天里的消息也会被删除。`)) return;
+  stateBag.data = await api(`/api/chats/${encodeURIComponent(chatId)}`, {
+    method: "DELETE",
+    body: { actorId: stateBag.actorId }
+  });
+  if (stateBag.activeChatId === chatId) {
+    stateBag.activeChatId = "";
+    localStorage.removeItem("kokubayashi.chatId");
+  }
+  ensureChat();
+  showNotice("聊天已删除。");
+  render();
+}
+
 function openGmChat(chatId) {
   if (!chatId) return;
   stateBag.activeChatId = chatId;
@@ -1269,20 +1297,23 @@ function selectCalendarDay(dayId) {
 
 async function sendMessage() {
   if (!currentActor()) return showNotice("请先创建或选择玩家账号。");
+  if (!stateBag.activeChatId) return showNotice("请选择聊天。");
   const textarea = document.getElementById("message-content");
   const content = textarea?.value.trim();
   const imageInput = document.getElementById("message-image");
   const imageFile = imageInput?.files?.[0];
+  const anonymousInput = document.getElementById("message-anonymous");
   const attachment = imageFile
     ? { type: "image", dataUrl: await fileToImageDataUrl(imageFile, 1400, 0.86, 8500000), name: imageFile.name }
     : null;
   if (!content && !attachment) return showNotice("消息内容或图片为空。");
   await api("/api/messages", {
     method: "POST",
-    body: { chatId: stateBag.activeChatId, authorId: stateBag.actorId, content, attachment }
+    body: { chatId: stateBag.activeChatId, authorId: stateBag.actorId, content, attachment, isAnonymous: anonymousInput?.checked === true }
   });
   textarea.value = "";
   if (imageInput) imageInput.value = "";
+  if (anonymousInput) anonymousInput.checked = false;
   const hint = document.getElementById("message-image-hint");
   if (hint) hint.textContent = "未选择图片";
   await refresh(true);
@@ -1740,6 +1771,12 @@ function visibleChats() {
   return chats.filter((chat) => chat.isPublic || chat.memberIds.includes(stateBag.actorId));
 }
 
+function canDeleteChat(chat) {
+  if (!chat) return false;
+  if (stateBag.gmUnlocked) return true;
+  return chat.isPublic !== true && chat.createdBy === stateBag.actorId;
+}
+
 function contactCandidates() {
   const actor = currentActor();
   if (!actor) return [];
@@ -1999,6 +2036,10 @@ function renderAvatar(actor) {
     return `<div class="avatar" style="background:${escapeAttr(color)}"><img class="avatar-img" src="${escapeAttr(actor.avatarData)}" alt="${escapeAttr(actor.name)}"></div>`;
   }
   return `<div class="avatar" style="background:${escapeAttr(color)}">${escapeHtml(text)}</div>`;
+}
+
+function renderAnonymousAvatar() {
+  return `<div class="avatar anonymous-avatar">匿</div>`;
 }
 
 function renderActorPreview(actor) {
