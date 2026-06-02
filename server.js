@@ -1652,8 +1652,23 @@ async function routeApi(req, res, url) {
     const character = state.characters.find((item) => item.id === characterId);
     if (!character) return sendJson(res, 404, { error: "Character not found." });
     pushUndo(state, "edit_character", `编辑角色：${character.name}`, ["characters"], { characterId });
-    if (body.name !== undefined) character.name = String(body.name).trim() || character.name;
-    if (body.handle !== undefined) character.handle = `@${String(body.handle).replace(/^@/, "").trim()}`;
+    if (body.name !== undefined) {
+      const name = String(body.name || "").trim();
+      if (!name) return sendJson(res, 400, { error: "Character name is required." });
+      if (name.length > 40) return sendJson(res, 400, { error: "Character name is too long." });
+      character.name = name;
+      character.avatarText = avatarText(name);
+    }
+    if (body.handle !== undefined) {
+      const handle = normalizeHandle(body.handle, character.name);
+      if (state.characters.some((item) => item.id !== character.id && item.handle.toLowerCase() === handle.toLowerCase())) {
+        return sendJson(res, 409, { error: "That handle is already taken." });
+      }
+      if (isAccountLoginTaken(state, handle, character.id)) {
+        return sendJson(res, 409, { error: "That handle conflicts with an account username." });
+      }
+      character.handle = handle;
+    }
     if (body.color !== undefined) character.color = String(body.color).trim() || character.color;
     if (body.avatarData !== undefined) {
       try {

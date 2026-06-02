@@ -148,6 +148,7 @@ async function handleAction(target) {
   if (action === "delete-selected-player-accounts") return deleteSelectedPlayerAccounts();
   if (action === "delete-all-player-accounts") return deleteAllPlayerAccounts();
   if (action === "update-account-avatar" || action === "update-character-avatar") return updateCharacterAvatar(target.dataset.characterId);
+  if (action === "save-character-profile") return saveCharacterProfile(target.dataset.characterId);
   if (action === "save-character-tags") return saveCharacterTags(target.dataset.characterId);
   if (action === "delete-character") return deleteCharacter(target.dataset.characterId);
   if (action === "delete-all-characters") return deleteAllCharacters();
@@ -1354,6 +1355,15 @@ function renderGm() {
                 </div>
               </div>
               <div class="tag-editor">
+                <div class="roster-control-row roster-profile-row">
+                  <label class="compact-field">显示名
+                    <input id="character-name-${escapeAttr(character.id)}" value="${escapeAttr(character.name)}" maxlength="40">
+                  </label>
+                  <label class="compact-field">@handle
+                    <input id="character-handle-${escapeAttr(character.id)}" value="${escapeAttr(character.handle)}" maxlength="32">
+                  </label>
+                  <button class="secondary-button compact-action" type="button" data-action="save-character-profile" data-character-id="${escapeAttr(character.id)}">保存资料</button>
+                </div>
                 <div class="roster-control-row">
                   <input id="character-tags-${escapeAttr(character.id)}" value="${escapeAttr(characterTagInputValue(character))}" placeholder="标签，用逗号分隔">
                   <button class="secondary-button compact-action" type="button" data-action="save-character-tags" data-character-id="${escapeAttr(character.id)}">保存标签</button>
@@ -1896,6 +1906,22 @@ async function updateCharacterAvatar(characterId) {
     body: { avatarData }
   });
   showNotice(`头像已更新：${character.name}`);
+  render();
+}
+
+async function saveCharacterProfile(characterId) {
+  if (!characterId) return;
+  const name = document.getElementById(`character-name-${characterId}`)?.value.trim();
+  const handle = document.getElementById(`character-handle-${characterId}`)?.value.trim();
+  if (!name) return showNotice("显示名不能为空。");
+  if (!handle) return showNotice("@handle 不能为空。");
+  stateBag.data = await api(`/api/characters/${encodeURIComponent(characterId)}`, {
+    method: "PATCH",
+    admin: true,
+    body: { name, handle }
+  });
+  const updated = getActor(characterId);
+  showNotice(`角色资料已保存：${updated?.name || name}`);
   render();
 }
 
