@@ -2697,6 +2697,74 @@ select:focus {
   color: var(--night);
 }
 
+.gm-badge.preview {
+  background: var(--gold);
+  border-color: rgba(201, 154, 61, 0.72);
+  color: var(--night);
+}
+
+.gm-quickbar {
+  margin: 12px 0 0;
+  border: 1px solid rgba(15, 95, 63, 0.16);
+  border-radius: var(--radius);
+  background:
+    linear-gradient(116deg, rgba(15, 95, 63, 0.12) 0 34%, transparent 34%),
+    rgba(255, 253, 244, 0.96);
+  box-shadow: var(--shadow-soft);
+  overflow: hidden;
+}
+
+.quickbar-grid,
+.quickbar-preview {
+  display: grid;
+  gap: 10px;
+  padding: 12px;
+}
+
+.quickbar-grid {
+  grid-template-columns: minmax(260px, 1.15fr) minmax(260px, 1fr) minmax(220px, 0.85fr);
+  align-items: end;
+}
+
+.quickbar-block {
+  display: grid;
+  gap: 7px;
+  min-width: 0;
+}
+
+.time-block {
+  grid-template-columns: 1fr 1fr auto;
+  align-items: end;
+}
+
+.time-block .mini-title,
+.preview-block .mini-title {
+  grid-column: 1 / -1;
+}
+
+.preview-block {
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: end;
+}
+
+.quickbar-person {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+
+.quickbar-person .avatar {
+  width: 40px;
+  height: 40px;
+  font-size: 14px;
+}
+
+.quickbar-preview {
+  grid-template-columns: minmax(220px, 1fr) minmax(260px, 1.4fr) auto;
+  align-items: center;
+}
+
 /* QOL: searchable, collapsible, badge-heavy work surfaces */
 .nav-button,
 .bottom-button {
@@ -2945,6 +3013,13 @@ select:focus {
 }
 
 @media (max-width: 880px) {
+  .quickbar-grid,
+  .quickbar-preview,
+  .time-block,
+  .preview-block {
+    grid-template-columns: 1fr;
+  }
+
   .chat-layout.with-drawer {
     grid-template-columns: 1fr;
   }

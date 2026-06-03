@@ -12,6 +12,9 @@ const stateBag = {
   memberDrawerChatId: "",
   openReplyPostId: "",
   actorSearch: "",
+  quickActorSearch: "",
+  previewActorId: "",
+  previewPickActorId: "",
   chatSearch: localStorage.getItem("kokubayashi.chatSearch") || "",
   feedFilter: localStorage.getItem("kokubayashi.feedFilter") || "all",
   feedSearch: localStorage.getItem("kokubayashi.feedSearch") || "",
@@ -34,6 +37,7 @@ const els = {
   viewRoot: document.getElementById("view-root"),
   viewTitle: document.getElementById("view-title"),
   clockLine: document.getElementById("clock-line"),
+  quickbar: document.getElementById("gm-quickbar"),
   actorSearch: document.getElementById("actor-search"),
   actorSelect: document.getElementById("actor-select"),
   actorPreview: document.getElementById("actor-preview"),
@@ -102,6 +106,16 @@ function bindGlobalEvents() {
       if (day) setSelectedCalendarMonth(day.month);
       renderGm();
     }
+    if (event.target?.id === "quick-actor-select") {
+      stateBag.actorId = event.target.value;
+      localStorage.setItem("kokubayashi.actorId", stateBag.actorId);
+      stateBag.openReplyPostId = "";
+      render();
+    }
+    if (event.target?.id === "quick-preview-select") {
+      stateBag.previewPickActorId = event.target.value;
+      renderShell();
+    }
     if (event.target?.id === "event-day") {
       stateBag.gmScheduleDayId = event.target.value;
       localStorage.setItem("kokubayashi.gmScheduleDayId", stateBag.gmScheduleDayId);
@@ -128,6 +142,11 @@ function bindGlobalEvents() {
     if (!target.id) return;
     if (target.id === "actor-search") {
       stateBag.actorSearch = target.value;
+      renderShell();
+      return;
+    }
+    if (target.id === "quick-actor-search") {
+      stateBag.quickActorSearch = target.value;
       renderShell();
       return;
     }
@@ -164,6 +183,13 @@ function bindGlobalEvents() {
 
 async function handleAction(target) {
   const action = target.dataset.action;
+  if (isPreviewMode() && !isPreviewAllowedAction(action)) {
+    showNotice("玩家视角预览是只读模式。退出预览后再执行 GM 或发言操作。");
+    return;
+  }
+  if (action === "start-player-preview") return startPlayerPreview();
+  if (action === "stop-player-preview") return stopPlayerPreview();
+  if (action === "quick-save-time") return quickSaveTime();
   if (action === "publish-post") return publishPost();
   if (action === "like-post") return likePost(target.dataset.postId);
   if (action === "reply-post") return replyPost(target.dataset.postId);
@@ -246,6 +272,14 @@ async function refresh(forceRender) {
 }
 
 function ensureActor() {
+  if (isPreviewMode()) {
+    const previewActor = getActor(stateBag.previewActorId);
+    if (!previewActor || previewActor.active === false) {
+      stateBag.previewActorId = "";
+      if (stateBag.tab === "gm") stateBag.tab = "feed";
+    }
+    return;
+  }
   const actors = availableActors();
   if (!actors.length) {
     stateBag.actorId = "";
@@ -271,6 +305,7 @@ function ensureChat() {
 }
 
 function setTab(tab) {
+  if (isPreviewMode() && tab === "gm") tab = "feed";
   stateBag.tab = tab;
   localStorage.setItem("kokubayashi.tab", tab);
   render();
@@ -338,22 +373,25 @@ function renderShell() {
   els.viewTitle.textContent = tabNames[stateBag.tab] || "时间线";
   els.clockLine.textContent = `${state.settings.schoolDay || ""} ${state.settings.gameTime || ""}`.trim();
   els.brandSubtitle.textContent = state.settings.chatName || "K-LINE";
-  els.gmBadge.textContent = stateBag.gmUnlocked ? "GM 已解锁" : "玩家模式";
-  els.gmBadge.classList.toggle("enabled", stateBag.gmUnlocked);
+  const previewActor = currentPreviewActor();
+  els.gmBadge.textContent = isPreviewMode() ? `玩家预览：${previewActor?.name || ""}` : (stateBag.gmUnlocked ? "GM 已解锁" : "玩家模式");
+  els.gmBadge.classList.toggle("enabled", isGmAdminMode());
+  els.gmBadge.classList.toggle("preview", isPreviewMode());
 
   document.querySelectorAll("[data-tab]").forEach((button) => {
     const label = tabNames[button.dataset.tab] || button.dataset.tab;
     const badge = navBadgeFor(button.dataset.tab);
+    button.hidden = isPreviewMode() && button.dataset.tab === "gm";
     button.innerHTML = `<span>${escapeHtml(label)}</span>${badge ? `<span class="nav-badge">${badge}</span>` : ""}`;
     button.classList.toggle("active", button.dataset.tab === stateBag.tab);
   });
 
   const actors = availableActors();
-  if (!stateBag.gmUnlocked && stateBag.actorId && !actors.some((actor) => actor.id === stateBag.actorId)) {
+  if (!isGmAdminMode() && !isPreviewMode() && stateBag.actorId && !actors.some((actor) => actor.id === stateBag.actorId)) {
     stateBag.actorId = "";
     localStorage.removeItem("kokubayashi.actorId");
   }
-  const hideIdentityPicker = !stateBag.gmUnlocked;
+  const hideIdentityPicker = !isGmAdminMode();
   const identityLabel = document.querySelector("label[for='actor-select']");
   if (identityLabel) identityLabel.hidden = hideIdentityPicker;
   els.actorSearch.hidden = hideIdentityPicker;
@@ -362,11 +400,13 @@ function renderShell() {
   if (els.actorSearch.value !== stateBag.actorSearch) els.actorSearch.value = stateBag.actorSearch;
   const filteredActors = filterActorsForPicker(actors);
   els.actorSelect.innerHTML = actors.length
-    ? `${stateBag.gmUnlocked ? "" : `<option value="">未选择账号</option>`}${filteredActors.map((actor) => `<option value="${actor.id}">${escapeHtml(actor.name)} ${escapeHtml(actor.handle)}</option>`).join("")}`
+    ? `${isGmAdminMode() ? "" : `<option value="">未选择账号</option>`}${filteredActors.map((actor) => `<option value="${actor.id}">${escapeHtml(actor.name)} ${escapeHtml(actor.handle)}</option>`).join("")}`
     : `<option value="">创建玩家账号后使用</option>`;
   els.actorSelect.value = stateBag.actorId;
   els.actorPreview.innerHTML = renderActorPreview(getActor(stateBag.actorId));
   els.accountTools.innerHTML = renderAccountTools();
+  els.quickbar.hidden = !stateBag.gmUnlocked;
+  els.quickbar.innerHTML = stateBag.gmUnlocked ? renderGmQuickbar() : "";
 }
 
 function filterActorsForPicker(actors) {
@@ -388,13 +428,106 @@ function filterMemberPicker(input) {
   });
 }
 
+function renderGmQuickbar() {
+  const allCharacters = stateBag.data?.characters?.filter((item) => item.active !== false) || [];
+  const previewCandidates = allCharacters;
+  if (isPreviewMode()) {
+    const actor = currentPreviewActor();
+    return `
+      <div class="quickbar-preview">
+        <div class="quickbar-person">
+          ${renderAvatar(actor)}
+          <div class="name-block">
+            <div class="name">玩家视角预览</div>
+            <div class="handle">${escapeHtml(actor ? `${actor.name} ${actor.handle || ""}` : "未选择玩家")}</div>
+          </div>
+        </div>
+        <div class="hint">当前为只读预览；聊天、公告、匿名内容会按该玩家权限过滤。</div>
+        <button class="primary-button compact-action" type="button" data-action="stop-player-preview">退出预览</button>
+      </div>
+    `;
+  }
+
+  const roleOptions = filterActorsForQuickbar(allCharacters);
+  const previewPick = previewCandidates.some((account) => account.id === stateBag.previewPickActorId)
+    ? stateBag.previewPickActorId
+    : (previewCandidates[0]?.id || "");
+  stateBag.previewPickActorId = previewPick;
+
+  return `
+    <div class="quickbar-grid">
+      <div class="quickbar-block role-block">
+        <div class="mini-title">快速扮演</div>
+        <input id="quick-actor-search" value="${escapeAttr(stateBag.quickActorSearch)}" placeholder="搜索角色 / @handle / 标签">
+        <select id="quick-actor-select" aria-label="快速切换扮演角色">
+          ${roleOptions.map((actor) => `<option value="${escapeAttr(actor.id)}" ${actor.id === stateBag.actorId ? "selected" : ""}>${escapeHtml(actor.name)} ${escapeHtml(actor.handle || "")}</option>`).join("")}
+        </select>
+      </div>
+      <div class="quickbar-block time-block">
+        <div class="mini-title">快速时间</div>
+        <input id="quick-school-day" value="${escapeAttr(stateBag.data.settings.schoolDay || "")}" placeholder="星期 / 日程">
+        <input id="quick-game-time" value="${escapeAttr(stateBag.data.settings.gameTime || "")}" placeholder="游戏时间">
+        <button class="secondary-button compact-action" type="button" data-action="quick-save-time">保存时间</button>
+      </div>
+      <div class="quickbar-block preview-block">
+        <div class="mini-title">玩家视角</div>
+        <select id="quick-preview-select" aria-label="选择玩家预览">
+          ${previewCandidates.map((account) => `<option value="${escapeAttr(account.id)}" ${account.id === previewPick ? "selected" : ""}>${escapeHtml(account.name)} ${escapeHtml(account.handle || "")}</option>`).join("")}
+        </select>
+        <button class="primary-button compact-action" type="button" data-action="start-player-preview" ${previewCandidates.length ? "" : "disabled"}>预览</button>
+      </div>
+    </div>
+  `;
+}
+
+function filterActorsForQuickbar(actors) {
+  const query = normalizeSearch(stateBag.quickActorSearch);
+  const filtered = query
+    ? actors.filter((actor) => searchableText([actor.name, actor.handle, actor.username, characterTags(actor).join(" ")]).includes(query))
+    : actors;
+  const selected = actors.find((actor) => actor.id === stateBag.actorId);
+  if (selected && !filtered.some((actor) => actor.id === selected.id)) return [selected, ...filtered];
+  return filtered;
+}
+
+function isPreviewMode() {
+  return stateBag.gmUnlocked && Boolean(stateBag.previewActorId);
+}
+
+function isGmAdminMode() {
+  return stateBag.gmUnlocked && !isPreviewMode();
+}
+
+function effectiveActorId() {
+  return isPreviewMode() ? stateBag.previewActorId : stateBag.actorId;
+}
+
+function currentPreviewActor() {
+  return stateBag.previewActorId ? getActor(stateBag.previewActorId) : null;
+}
+
+function isPreviewAllowedAction(action) {
+  return [
+    "set-feed-filter",
+    "select-chat",
+    "toggle-pin-chat",
+    "jump-latest",
+    "toggle-member-drawer",
+    "select-calendar-month",
+    "select-calendar-day",
+    "view-profile",
+    "close-profile",
+    "stop-player-preview"
+  ].includes(action);
+}
+
 function navBadgeFor(tab) {
   if (!stateBag.data) return "";
   if (tab === "chats") {
     const count = unreadChatCount();
     return count ? String(Math.min(count, 99)) : "";
   }
-  if (tab === "gm" && stateBag.gmUnlocked) {
+  if (tab === "gm" && isGmAdminMode()) {
     const pending = pendingGmCount();
     return pending ? String(Math.min(pending, 99)) : "";
   }
@@ -416,34 +549,36 @@ function unreadChatCount() {
 function unreadMessagesForChat(chat) {
   if (!chat) return [];
   const readTime = stateBag.chatReadTimes[chat.id] || "";
+  const actorId = effectiveActorId();
   return (stateBag.data?.messages || []).filter((message) => (
     message.chatId === chat.id &&
     (!readTime || String(message.createdAt).localeCompare(String(readTime)) > 0) &&
-    (!stateBag.actorId || message.authorId !== stateBag.actorId)
+    (!actorId || message.authorId !== actorId)
   ));
 }
 
 function renderFeed() {
   const posts = filteredFeedPosts([...stateBag.data.posts].sort((a, b) => String(b.createdAt).localeCompare(String(a.createdAt))));
   const actor = currentActor();
+  const canPost = Boolean(actor) && !isPreviewMode();
   els.viewRoot.innerHTML = `
     <div class="feed-layout">
       <section class="composer">
-        <textarea id="post-content" maxlength="280" placeholder="${actor ? "现在发生了什么？" : "先创建玩家账号"}" ${actor ? "" : "disabled"}></textarea>
+        <textarea id="post-content" maxlength="280" placeholder="${isPreviewMode() ? "玩家视角预览为只读" : (actor ? "现在发生了什么？" : "先创建玩家账号")}" ${canPost ? "" : "disabled"}></textarea>
         <div class="message-tools post-tools">
           ${renderEmojiBar("post-content")}
           <label class="checkbox-line compact-checkbox">
-            <input id="post-anonymous" type="checkbox" ${actor ? "" : "disabled"}>
+            <input id="post-anonymous" type="checkbox" ${canPost ? "" : "disabled"}>
             <span>匿名发布</span>
           </label>
           <label class="file-picker">图片
-            <input id="post-image" type="file" accept="image/*" ${actor ? "" : "disabled"}>
+            <input id="post-image" type="file" accept="image/*" ${canPost ? "" : "disabled"}>
           </label>
           <span id="post-image-hint" class="hint">未选择图片</span>
         </div>
         <div class="composer-actions">
           <div class="hint">${escapeHtml(stateBag.data.settings.gameTime)} · ${escapeHtml(actor?.name || "未选择账号")}</div>
-          <button class="primary-button" type="button" data-action="publish-post" ${actor ? "" : "disabled"}>发布</button>
+          <button class="primary-button" type="button" data-action="publish-post" ${canPost ? "" : "disabled"}>发布</button>
         </div>
       </section>
       <section class="filter-strip" aria-label="时间线筛选">
@@ -475,9 +610,10 @@ function feedFilterButtons() {
 
 function filteredFeedPosts(posts) {
   const query = normalizeSearch(stateBag.feedSearch);
+  const actorId = effectiveActorId();
   return posts.filter((post) => {
     const author = getActor(post.authorId);
-    if (stateBag.feedFilter === "mine" && post.authorId !== stateBag.actorId) return false;
+    if (stateBag.feedFilter === "mine" && post.authorId !== actorId) return false;
     if (stateBag.feedFilter === "anonymous" && post.isAnonymous !== true) return false;
     if (stateBag.feedFilter === "images" && post.attachment?.type !== "image") return false;
     if (stateBag.feedFilter === "accounts" && author?.type !== "account") return false;
@@ -489,7 +625,7 @@ function filteredFeedPosts(posts) {
 }
 
 function renderBulletins() {
-  const bulletins = [...(stateBag.data.bulletins || [])]
+  const bulletins = visibleBulletins()
     .sort((a, b) => String(b.createdAt).localeCompare(String(a.createdAt)));
   els.viewRoot.innerHTML = `
     <div class="bulletin-layout">
@@ -511,7 +647,7 @@ function renderBulletins() {
 function renderBulletinCard(bulletin) {
   const author = getActor(bulletin.authorId);
   const day = getCalendarDay(bulletin.dayId);
-  const adminTools = stateBag.gmUnlocked ? `
+  const adminTools = isGmAdminMode() ? `
     <div class="admin-row">
       <button class="danger-button" type="button" data-action="delete-bulletin" data-bulletin-id="${bulletin.id}">删除</button>
     </div>
@@ -535,17 +671,17 @@ function renderBulletinCard(bulletin) {
 function renderPost(post) {
   const isAnonymous = post.isAnonymous === true;
   const author = getActor(post.authorId);
-  const profileId = isAnonymous && !stateBag.gmUnlocked ? "" : author?.id || "";
+  const profileId = isAnonymous && !isGmAdminMode() ? "" : author?.id || "";
   const displayName = isAnonymous
-    ? (stateBag.gmUnlocked && author ? `匿名（${author.name}）` : "匿名")
+    ? (isGmAdminMode() && author ? `匿名（${author.name}）` : "匿名")
     : (author?.name || "未知");
   const handleLine = [
-    isAnonymous && stateBag.gmUnlocked && author ? author.handle : (!isAnonymous ? author?.handle : ""),
+    isAnonymous && isGmAdminMode() && author ? author.handle : (!isAnonymous ? author?.handle : ""),
     post.gameTime
   ].filter(Boolean).join(" · ");
   const replies = post.replies || [];
-  const replyOpen = stateBag.openReplyPostId === post.id;
-  const admin = stateBag.gmUnlocked ? `
+  const replyOpen = !isPreviewMode() && stateBag.openReplyPostId === post.id;
+  const admin = isGmAdminMode() ? `
     <div class="admin-box">
       <div class="admin-row">
         <label>时间 <input class="time-input" id="post-time-${post.id}" value="${escapeAttr(post.gameTime)}"></label>
@@ -574,8 +710,8 @@ function renderPost(post) {
       <div class="post-content">${formatText(post.content)}</div>
       ${post.attachment?.type === "image" ? renderImageAttachment(post.attachment, "post-image") : ""}
       <div class="post-actions">
-        <button class="metric-button" type="button" data-action="like-post" data-post-id="${post.id}">喜欢 ${post.metrics.likes}</button>
-        <button class="metric-button" type="button" data-action="toggle-reply-composer" data-post-id="${post.id}">${replyOpen ? "收起回复" : `回复${replies.length ? ` ${replies.length}` : ""}`}</button>
+        <button class="metric-button" type="button" data-action="like-post" data-post-id="${post.id}" ${isPreviewMode() ? "disabled" : ""}>喜欢 ${post.metrics.likes}</button>
+        <button class="metric-button" type="button" data-action="toggle-reply-composer" data-post-id="${post.id}" ${isPreviewMode() ? "disabled" : ""}>${replyOpen ? "收起回复" : `回复${replies.length ? ` ${replies.length}` : ""}`}</button>
         <span>转发 ${post.metrics.reposts}</span>
         <span>浏览 ${post.metrics.views}</span>
       </div>
@@ -602,9 +738,9 @@ function renderPost(post) {
 function renderReply(postId, reply) {
   const isAnonymous = reply.isAnonymous === true;
   const author = getActor(reply.authorId);
-  const profileId = isAnonymous && !stateBag.gmUnlocked ? "" : author?.id || "";
+  const profileId = isAnonymous && !isGmAdminMode() ? "" : author?.id || "";
   const displayName = isAnonymous
-    ? (stateBag.gmUnlocked && author ? `匿名（${author.name}）` : "匿名")
+    ? (isGmAdminMode() && author ? `匿名（${author.name}）` : "匿名")
     : (author?.name || "未知");
   return `
     <div class="reply">
@@ -628,7 +764,7 @@ function renderReply(postId, reply) {
 }
 
 function renderPlayerChatTools() {
-  if (stateBag.gmUnlocked) return "";
+  if (stateBag.gmUnlocked || isPreviewMode()) return "";
   const actor = currentActor();
   if (!actor) return "";
   const contacts = acceptedContacts();
@@ -663,6 +799,7 @@ function renderChats() {
   const active = chats.find((chat) => chat.id === stateBag.activeChatId);
   const messages = active ? stateBag.data.messages.filter((message) => message.chatId === active.id).sort((a, b) => String(a.createdAt).localeCompare(String(b.createdAt))) : [];
   const roomChats = filteredAndSortedChats(chats);
+  const canSendMessage = Boolean(active && currentActor()) && !isPreviewMode();
   const previousBox = document.getElementById("messages");
   const previousChatId = stateBag.renderedChatId;
   const wasNearBottom = isNearBottom(previousBox);
@@ -710,19 +847,19 @@ function renderChats() {
         </div>
         ${active && stateBag.chatNewPromptId === active.id ? `<button class="jump-latest-button" type="button" data-action="jump-latest">有新消息，跳到最新</button>` : ""}
         <div class="message-form">
-          <textarea id="message-content" maxlength="500" placeholder="发送消息"></textarea>
+          <textarea id="message-content" maxlength="500" placeholder="${isPreviewMode() ? "玩家视角预览为只读" : "发送消息"}" ${canSendMessage ? "" : "disabled"}></textarea>
           <div class="message-tools">
             ${renderEmojiBar("message-content")}
             <label class="checkbox-line compact-checkbox">
-              <input id="message-anonymous" type="checkbox">
+              <input id="message-anonymous" type="checkbox" ${canSendMessage ? "" : "disabled"}>
               <span>匿名发送</span>
             </label>
             <label class="file-picker">图片
-              <input id="message-image" type="file" accept="image/*">
+              <input id="message-image" type="file" accept="image/*" ${canSendMessage ? "" : "disabled"}>
             </label>
             <span id="message-image-hint" class="hint">未选择图片</span>
           </div>
-          <button class="primary-button" type="button" data-action="send-message">发送</button>
+          <button class="primary-button" type="button" data-action="send-message" ${canSendMessage ? "" : "disabled"}>发送</button>
         </div>
       </section>
       ${renderChatMemberDrawer(active)}
@@ -826,11 +963,11 @@ function renderChatMemberDrawer(chat) {
 function renderMessage(message) {
   const isAnonymous = message.isAnonymous === true;
   const author = getActor(message.authorId);
-  const profileId = isAnonymous && !stateBag.gmUnlocked ? "" : author?.id || "";
+  const profileId = isAnonymous && !isGmAdminMode() ? "" : author?.id || "";
   const displayName = isAnonymous
-    ? (stateBag.gmUnlocked && author ? `匿名（${author.name}）` : "匿名")
+    ? (isGmAdminMode() && author ? `匿名（${author.name}）` : "匿名")
     : (author?.name || "未知");
-  const mine = !isAnonymous && author?.id === stateBag.actorId;
+  const mine = !isAnonymous && author?.id === effectiveActorId();
   const hasImage = message.attachment?.type === "image";
   const hasText = Boolean(String(message.content || "").trim());
   return `
@@ -847,7 +984,7 @@ function renderMessage(message) {
         </div>
         ${hasText ? `<div class="message-text">${formatText(message.content)}</div>` : ""}
         ${message.attachment?.type === "image" ? renderImageAttachment(message.attachment) : ""}
-        ${stateBag.gmUnlocked ? `<button class="danger-button message-delete" type="button" data-action="delete-message" data-message-id="${message.id}">删除</button>` : ""}
+        ${isGmAdminMode() ? `<button class="danger-button message-delete" type="button" data-action="delete-message" data-message-id="${message.id}">删除</button>` : ""}
       </div>
     </div>
   `;
@@ -888,7 +1025,7 @@ function renderCalendar() {
           ${leadingBlanks.map(() => `<div class="calendar-day blank" aria-hidden="true"></div>`).join("")}
           ${monthDays.map((day) => {
             const scheduleCount = (day.schedule || []).length;
-            const eventCount = (day.events || []).length;
+            const eventCount = visibleCalendarEvents(day).length;
             const countText = [
               scheduleCount ? `${scheduleCount} 节` : "休",
               eventCount ? `${eventCount} 事件` : ""
@@ -921,7 +1058,7 @@ function renderCalendar() {
 }
 
 function renderCalendarEvents(day) {
-  const events = day?.events || [];
+  const events = visibleCalendarEvents(day);
   if (!events.length) return "";
   return `
     <div class="event-list">
@@ -989,7 +1126,10 @@ function renderProfileActions(profile, status) {
   const actor = currentActor();
   if (!actor) return `<div class="hint">创建或登录玩家账号后可以关注与私信。</div>`;
   if (actor.id === profile.id) return `<div class="hint">这是你当前使用的账号。</div>`;
-  if (stateBag.gmUnlocked) {
+  if (isPreviewMode()) {
+    return `<div class="hint">玩家视角预览为只读。当前关系状态：${escapeHtml(relationshipLabel(profile.id))}</div>`;
+  }
+  if (isGmAdminMode()) {
     return `<button class="primary-button" type="button" data-action="open-direct-chat" data-character-id="${profile.id}">以当前身份打开私聊</button>`;
   }
   if (status === "accepted") {
@@ -1008,7 +1148,23 @@ function renderProfileActions(profile, status) {
 }
 
 function renderAccountTools() {
-  if (stateBag.gmUnlocked) {
+  if (isPreviewMode()) {
+    const actor = currentPreviewActor();
+    return `
+      <div class="mini-form">
+        <div class="mini-title">玩家视角预览</div>
+        <div class="account-session-card">
+          ${renderAvatar(actor)}
+          <div class="name-block">
+            <div class="name">${escapeHtml(actor?.name || "未选择玩家")}</div>
+            <div class="handle">${escapeHtml(actor?.handle || "")}</div>
+          </div>
+        </div>
+        <button class="primary-button" type="button" data-action="stop-player-preview">退出预览</button>
+      </div>
+    `;
+  }
+  if (isGmAdminMode()) {
     return `<div class="hint">GM 模式可使用全部角色。</div>`;
   }
 
@@ -1613,6 +1769,18 @@ function gmSectionId(title, index) {
 }
 
 function renderGm() {
+  if (isPreviewMode()) {
+    els.viewRoot.innerHTML = `
+      <div class="feed-layout">
+        <section class="composer">
+          <div class="section-title">玩家视角预览中</div>
+          <div class="hint">退出预览后可以返回 GM 后台。</div>
+          <button class="primary-button" type="button" data-action="stop-player-preview">退出预览</button>
+        </section>
+      </div>
+    `;
+    return;
+  }
   if (!stateBag.gmUnlocked) {
     els.viewRoot.innerHTML = `
       <div class="feed-layout">
@@ -1997,6 +2165,7 @@ async function unlockGm() {
 
 function lockGm() {
   stateBag.gmUnlocked = false;
+  stateBag.previewActorId = "";
   localStorage.setItem("kokubayashi.gmUnlocked", "false");
   render();
 }
@@ -2035,6 +2204,45 @@ async function saveSettings() {
   });
   showNotice("时间已更新。");
   await refresh(true);
+}
+
+async function quickSaveTime() {
+  if (!isGmAdminMode()) return showNotice("请先退出玩家预览再修改时间。");
+  await api("/api/settings", {
+    method: "PATCH",
+    admin: true,
+    body: {
+      gameTime: document.getElementById("quick-game-time")?.value,
+      schoolDay: document.getElementById("quick-school-day")?.value,
+      feedName: stateBag.data.settings.feedName,
+      chatName: stateBag.data.settings.chatName
+    }
+  });
+  showNotice("快速时间已保存。");
+  await refresh(true);
+}
+
+function startPlayerPreview() {
+  if (!stateBag.gmUnlocked) return showNotice("请先解锁 GM。");
+  const actorId = document.getElementById("quick-preview-select")?.value || stateBag.previewPickActorId;
+  const actor = getActor(actorId);
+  if (!actor || actor.active === false) return showNotice("请选择要预览的玩家账号。");
+  stateBag.previewActorId = actor.id;
+  stateBag.profileId = "";
+  stateBag.openReplyPostId = "";
+  if (stateBag.tab === "gm") {
+    stateBag.tab = "feed";
+    localStorage.setItem("kokubayashi.tab", stateBag.tab);
+  }
+  showNotice(`正在以 ${actor.name} 的玩家视角预览。`);
+  render();
+}
+
+function stopPlayerPreview(show = true) {
+  stateBag.previewActorId = "";
+  stateBag.profileId = "";
+  if (show) showNotice("已退出玩家视角预览。");
+  render();
 }
 
 async function saveCurrentCalendarDay() {
@@ -2684,7 +2892,7 @@ async function createPlayerPrivateChat() {
 
 async function api(path, options = {}) {
   const headers = { "Content-Type": "application/json" };
-  if ((stateBag.gmUnlocked || options.admin) && stateBag.gmPin) headers["X-GM-PIN"] = stateBag.gmPin;
+  if ((isGmAdminMode() || options.admin) && stateBag.gmPin) headers["X-GM-PIN"] = stateBag.gmPin;
   if (!stateBag.gmUnlocked && stateBag.actorId && stateBag.accountTokens[stateBag.actorId]) {
     headers["X-Account-Token"] = stateBag.accountTokens[stateBag.actorId];
   }
@@ -2702,16 +2910,26 @@ async function api(path, options = {}) {
 
 function availableActors() {
   const chars = stateBag.data?.characters?.filter((item) => item.active !== false) || [];
-  if (stateBag.gmUnlocked) return chars;
+  if (isPreviewMode()) {
+    const actor = currentPreviewActor();
+    return actor ? [actor] : [];
+  }
+  if (isGmAdminMode()) return chars;
   const ownedIds = new Set(Object.keys(stateBag.accountTokens));
   return chars.filter((item) => item.type === "account" && ownedIds.has(item.id));
 }
 
 function visibleChats() {
   const chats = stateBag.data?.chats || [];
-  if (stateBag.gmUnlocked) return chats;
-  if (!stateBag.actorId) return chats.filter((chat) => chat.isPublic);
-  return chats.filter((chat) => chat.isPublic || chat.memberIds.includes(stateBag.actorId));
+  if (isGmAdminMode()) return chats;
+  const actorId = effectiveActorId();
+  if (!actorId) return chats.filter((chat) => chat.isPublic);
+  return chats.filter((chat) => chat.isPublic || chat.memberIds.includes(actorId));
+}
+
+function visibleBulletins() {
+  const bulletins = stateBag.data?.bulletins || [];
+  return isGmAdminMode() ? [...bulletins] : bulletins.filter((bulletin) => bulletin.isPublic !== false);
 }
 
 function filteredAndSortedChats(chats) {
@@ -2771,13 +2989,13 @@ function isNearBottom(element) {
 
 function canDeleteChat(chat) {
   if (!chat) return false;
-  if (stateBag.gmUnlocked) return true;
+  if (isGmAdminMode()) return true;
   return chat.isPublic !== true && chat.createdBy === stateBag.actorId;
 }
 
 function canDeleteReply(reply) {
   if (!reply) return false;
-  if (stateBag.gmUnlocked) return true;
+  if (isGmAdminMode()) return true;
   return reply.authorId === stateBag.actorId;
 }
 
@@ -2790,6 +3008,11 @@ function contactCandidates() {
 
 function calendarDays() {
   return stateBag.data?.calendarDays || [];
+}
+
+function visibleCalendarEvents(day) {
+  const events = day?.events || [];
+  return isGmAdminMode() ? events : events.filter((event) => event.isPublic || event.triggeredAt);
 }
 
 function normalizeCalendarDayIdClient(dayId) {
@@ -3006,8 +3229,9 @@ function relationshipStatus(targetId) {
 }
 
 function currentActor() {
+  if (isPreviewMode()) return currentPreviewActor();
   if (!stateBag.actorId) return null;
-  if (stateBag.gmUnlocked) return getActor(stateBag.actorId);
+  if (isGmAdminMode()) return getActor(stateBag.actorId);
   return availableActors().find((actor) => actor.id === stateBag.actorId) || null;
 }
 
