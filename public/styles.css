@@ -1304,11 +1304,16 @@ textarea {
 .chat-image,
 .post-image {
   margin: 8px 0 0;
+  max-width: 100%;
+  min-width: 0;
+  overflow: hidden;
 }
 
 .chat-image img,
 .post-image img {
   display: block;
+  width: auto;
+  height: auto;
   max-width: min(420px, 100%);
   max-height: 360px;
   border-radius: var(--radius);
@@ -1325,6 +1330,10 @@ textarea {
 .chat-image figcaption,
 .post-image figcaption {
   margin-top: 4px;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   color: var(--muted);
   font-size: 12px;
 }
@@ -3469,6 +3478,36 @@ select:focus {
   .message-bubble {
     max-width: 92%;
     padding: 8px 10px;
+    min-width: 0;
+    overflow: hidden;
+  }
+
+  .message-bubble.has-attachment,
+  .message-bubble.image-only {
+    max-width: min(92%, calc(100vw - 54px));
+  }
+
+  .chat-image,
+  .post-image {
+    width: 100%;
+    max-width: 100%;
+  }
+
+  .chat-image img,
+  .post-image img {
+    width: auto;
+    height: auto;
+    max-width: 100%;
+    max-height: min(54dvh, 360px);
+    object-fit: contain;
+  }
+
+  .chat-image figcaption,
+  .post-image figcaption {
+    max-width: 100%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
 
   .message-form {
