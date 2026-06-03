@@ -13,10 +13,11 @@ const stateBag = {
   openReplyPostId: "",
   actorSearch: "",
   quickActorSearch: "",
+  quickActorSearchDraft: "",
   previewActorId: "",
   previewPickActorId: "",
   chatSearch: localStorage.getItem("kokubayashi.chatSearch") || "",
-  feedFilter: localStorage.getItem("kokubayashi.feedFilter") || "all",
+  feedFilter: normalizeFeedFilter(localStorage.getItem("kokubayashi.feedFilter") || "all"),
   feedSearch: localStorage.getItem("kokubayashi.feedSearch") || "",
   feedHashtag: normalizeHashtag(localStorage.getItem("kokubayashi.feedHashtag") || ""),
   rosterSearch: localStorage.getItem("kokubayashi.rosterSearch") || "",
@@ -150,8 +151,7 @@ function bindGlobalEvents() {
       return;
     }
     if (target.id === "quick-actor-search") {
-      stateBag.quickActorSearch = target.value;
-      renderShell();
+      stateBag.quickActorSearchDraft = target.value;
       return;
     }
     if (target.id === "chat-search") {
@@ -174,6 +174,13 @@ function bindGlobalEvents() {
     }
   });
 
+  document.body.addEventListener("keydown", (event) => {
+    if (event.target?.id === "quick-actor-search" && event.key === "Enter") {
+      event.preventDefault();
+      applyQuickActorSearch();
+    }
+  });
+
   els.actorSelect.addEventListener("change", () => {
     stateBag.actorId = els.actorSelect.value;
     localStorage.setItem("kokubayashi.actorId", stateBag.actorId);
@@ -193,6 +200,7 @@ async function handleAction(target) {
   }
   if (action === "start-player-preview") return startPlayerPreview();
   if (action === "stop-player-preview") return stopPlayerPreview();
+  if (action === "apply-quick-actor-search") return applyQuickActorSearch();
   if (action === "quick-save-time") return quickSaveTime();
   if (action === "publish-post") return publishPost();
   if (action === "like-post") return likePost(target.dataset.postId);
@@ -476,7 +484,10 @@ function renderGmQuickbar() {
     <div class="quickbar-grid">
       <div class="quickbar-block role-block">
         <div class="mini-title">快速扮演</div>
-        <input id="quick-actor-search" value="${escapeAttr(stateBag.quickActorSearch)}" placeholder="搜索角色 / @handle / 标签">
+        <div class="quick-search-row">
+          <input id="quick-actor-search" value="${escapeAttr(stateBag.quickActorSearchDraft)}" placeholder="搜索角色 / @handle / 标签">
+          <button class="secondary-button compact-action" type="button" data-action="apply-quick-actor-search">搜索</button>
+        </div>
         <select id="quick-actor-select" aria-label="快速切换扮演角色">
           ${roleOptions.map((actor) => `<option value="${escapeAttr(actor.id)}" ${actor.id === stateBag.actorId ? "selected" : ""}>${escapeHtml(actor.name)} ${escapeHtml(actor.handle || "")}</option>`).join("")}
         </select>
@@ -506,6 +517,14 @@ function filterActorsForQuickbar(actors) {
   const selected = actors.find((actor) => actor.id === stateBag.actorId);
   if (selected && !filtered.some((actor) => actor.id === selected.id)) return [selected, ...filtered];
   return filtered;
+}
+
+function applyQuickActorSearch() {
+  const input = document.getElementById("quick-actor-search");
+  const query = input ? input.value : stateBag.quickActorSearchDraft;
+  stateBag.quickActorSearchDraft = query;
+  stateBag.quickActorSearch = query;
+  renderShell();
 }
 
 function isPreviewMode() {
@@ -578,11 +597,12 @@ function unreadMessagesForChat(chat) {
 }
 
 function renderFeed() {
-  const posts = filteredFeedPosts([...stateBag.data.posts].sort((a, b) => String(b.createdAt).localeCompare(String(a.createdAt))));
+  const posts = filteredFeedPosts(sortTimelinePosts(stateBag.data.posts || []));
   const actor = currentActor();
   const canPost = Boolean(actor) && !isPreviewMode();
   els.viewRoot.innerHTML = `
     <div class="feed-layout">
+      ${isGmAdminMode() ? renderPostDayDatalist() : ""}
       <section class="composer">
         <textarea id="post-content" maxlength="280" placeholder="${isPreviewMode() ? "玩家视角预览为只读" : (actor ? "现在发生了什么？" : "先创建玩家账号")}" ${canPost ? "" : "disabled"}></textarea>
         <div class="message-tools post-tools">
@@ -621,9 +641,7 @@ function feedFilterButtons() {
     ["all", "全部"],
     ["mine", "我的"],
     ["anonymous", "匿名"],
-    ["images", "有图"],
-    ["accounts", "账号"],
-    ["npc", "NPC"]
+    ["images", "有图"]
   ];
   return filters.map(([value, label]) => `
     <button class="segment-button ${stateBag.feedFilter === value ? "active" : ""}" type="button" data-action="set-feed-filter" data-filter="${value}">${label}</button>
@@ -667,6 +685,32 @@ function rankedFeedHashtags() {
     .slice(0, 12);
 }
 
+function renderPostDayDatalist() {
+  return `
+    <datalist id="post-day-options">
+      ${calendarDays().map((day) => `<option value="${escapeAttr(dayOptionLabel(day))}">${escapeHtml(day.id)}</option>`).join("")}
+    </datalist>
+  `;
+}
+
+function sortTimelinePosts(posts) {
+  return [...posts].sort((a, b) => {
+    const aSort = timelineSortValue(a);
+    const bSort = timelineSortValue(b);
+    if (aSort !== null && bSort !== null && aSort !== bSort) return bSort - aSort;
+    if (aSort !== null && bSort === null) return -1;
+    if (aSort === null && bSort !== null) return 1;
+    return String(b.createdAt || "").localeCompare(String(a.createdAt || ""));
+  });
+}
+
+function timelineSortValue(post) {
+  const rawValue = post?.timelineSortKey;
+  if (rawValue === null || rawValue === undefined || rawValue === "") return null;
+  const value = Number(rawValue);
+  return Number.isFinite(value) ? value : null;
+}
+
 function filteredFeedPosts(posts) {
   const query = normalizeSearch(stateBag.feedSearch);
   const actorId = effectiveActorId();
@@ -675,8 +719,6 @@ function filteredFeedPosts(posts) {
     if (stateBag.feedFilter === "mine" && post.authorId !== actorId) return false;
     if (stateBag.feedFilter === "anonymous" && post.isAnonymous !== true) return false;
     if (stateBag.feedFilter === "images" && post.attachment?.type !== "image") return false;
-    if (stateBag.feedFilter === "accounts" && author?.type !== "account") return false;
-    if (stateBag.feedFilter === "npc" && author?.type !== "npc") return false;
     if (stateBag.feedHashtag && !postMatchesHashtag(post, stateBag.feedHashtag)) return false;
     if (!query) return true;
     const replyText = (post.replies || []).map((reply) => reply.content).join(" ");
@@ -735,15 +777,18 @@ function renderPost(post) {
   const displayName = isAnonymous
     ? (isGmAdminMode() && author ? `匿名（${author.name}）` : "匿名")
     : (author?.name || "未知");
+  const timelineLabel = postTimelineLabel(post);
   const handleLine = [
     isAnonymous && isGmAdminMode() && author ? author.handle : (!isAnonymous ? author?.handle : ""),
-    post.gameTime
+    timelineLabel
   ].filter(Boolean).join(" · ");
   const replies = post.replies || [];
   const replyOpen = !isPreviewMode() && stateBag.openReplyPostId === post.id;
+  const postDayValue = dayOptionLabel(getCalendarDay(post.dayId));
   const admin = isGmAdminMode() ? `
     <div class="admin-box">
       <div class="admin-row">
+        <label>日期 <input class="time-input" id="post-day-${post.id}" list="post-day-options" value="${escapeAttr(postDayValue)}" placeholder="未指定"></label>
         <label>时间 <input class="time-input" id="post-time-${post.id}" value="${escapeAttr(post.gameTime)}"></label>
         <label>赞 <input id="post-likes-${post.id}" type="number" min="0" value="${post.metrics.likes}"></label>
         <label>转 <input id="post-reposts-${post.id}" type="number" min="0" value="${post.metrics.reposts}"></label>
@@ -2069,9 +2114,13 @@ function toggleReplyComposer(postId) {
 }
 
 function setFeedFilter(filter) {
-  stateBag.feedFilter = ["all", "mine", "anonymous", "images", "accounts", "npc"].includes(filter) ? filter : "all";
+  stateBag.feedFilter = normalizeFeedFilter(filter);
   localStorage.setItem("kokubayashi.feedFilter", stateBag.feedFilter);
   renderFeed();
+}
+
+function normalizeFeedFilter(filter) {
+  return ["all", "mine", "anonymous", "images"].includes(filter) ? filter : "all";
 }
 
 function setFeedHashtag(hashtag) {
@@ -2115,9 +2164,12 @@ async function savePost(postId) {
   const reposts = document.getElementById(`post-reposts-${postId}`)?.value;
   const views = document.getElementById(`post-views-${postId}`)?.value;
   const gameTime = document.getElementById(`post-time-${postId}`)?.value;
+  const dayValue = document.getElementById(`post-day-${postId}`)?.value || "";
+  const dayId = resolveCalendarDayInput(dayValue);
+  if (dayValue.trim() && !dayId) return showNotice("请选择有效的帖子日期。");
   await api(`/api/feed/posts/${encodeURIComponent(postId)}`, {
     method: "PATCH",
-    body: { gameTime, metrics: { likes, reposts, views } },
+    body: { dayId, gameTime, metrics: { likes, reposts, views } },
     admin: true
   });
   showNotice("帖子数据已保存。");
@@ -3180,6 +3232,35 @@ function dayOptionLabel(day) {
   return `${day?.dateLabel || ""} ${day?.label || ""}`.trim() || day?.id || "";
 }
 
+function resolveCalendarDayInput(value) {
+  const input = String(value || "").trim();
+  if (!input) return "";
+  const normalized = normalizeCalendarDayIdClient(input);
+  const folded = input.toLowerCase();
+  const day = calendarDays().find((item) => (
+    item.id === normalized ||
+    dayOptionLabel(item).toLowerCase() === folded ||
+    String(item.dateLabel || "").trim().toLowerCase() === folded ||
+    `${item.month}/${item.dayOfMonth}` === input ||
+    `${item.month}月${item.dayOfMonth}日` === input
+  ));
+  return day?.id || "";
+}
+
+function postTimelineLabel(post) {
+  const time = String(post?.gameTime || "").trim();
+  const day = getCalendarDay(post?.dayId);
+  if (!day) return time;
+
+  const dayLabel = dayOptionLabel(day);
+  if (!time) return dayLabel;
+  const foldedTime = time.toLowerCase();
+  const alreadyIncludesDay = [day.dateLabel, day.label, dayLabel]
+    .filter(Boolean)
+    .some((label) => foldedTime.includes(String(label).toLowerCase()));
+  return alreadyIncludesDay ? time : `${dayLabel} · ${time}`;
+}
+
 function renderDayOptions(days, selectedId) {
   const selectedDayId = getCalendarDay(selectedId)?.id || normalizeCalendarDayIdClient(selectedId);
   return calendarMonths().map((month) => {
@@ -3463,9 +3544,20 @@ function characterTagInputValue(actor) {
 }
 
 function renderCharacterTags(actor) {
-  const tags = characterTags(actor);
+  const tags = visibleCharacterTags(actor);
   if (!tags.length) return "";
   return `<span class="tag-list">${tags.map((tag) => `<span class="tag-pill">${escapeHtml(tag)}</span>`).join("")}</span>`;
+}
+
+function visibleCharacterTags(actor) {
+  const tags = characterTags(actor);
+  if (isGmAdminMode()) return tags;
+  return tags.filter((tag) => !isImmersionBreakingTag(tag));
+}
+
+function isImmersionBreakingTag(tag) {
+  const value = normalizeSearch(tag).replace(/[\s_\-・/／|｜]+/g, "");
+  return ["npc", "pc", "player", "account", "gm", "gm角色", "gm扮演角色", "玩家", "玩家角色", "玩家账号"].includes(value);
 }
 
 function typeLabelForBulletin(type) {

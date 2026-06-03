@@ -2752,6 +2752,13 @@ select:focus {
   min-width: 0;
 }
 
+.quick-search-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 7px;
+  align-items: stretch;
+}
+
 .time-block {
   grid-template-columns: 1fr 1fr auto;
   align-items: end;

@@ -190,7 +190,7 @@ function createInitialState() {
 }
 
 function normalizeState(state) {
-  state.version = Math.max(Number(state.version || 1), 6);
+  state.version = Math.max(Number(state.version || 1), 7);
   state.updatedAt ||= new Date().toISOString();
   state.settings ||= {};
   state.settings.gameTime ||= "开学首日 18:12";
@@ -255,6 +255,10 @@ function normalizeState(state) {
   if (currentDay) state.settings.schoolDay = calendarDayDisplay(currentDay);
 
   for (const post of state.posts) {
+    post.gameTime = String(post.gameTime || state.settings.gameTime || "").trim();
+    post.createdAt ||= new Date().toISOString();
+    post.dayId = inferTimelineDayId(state, post);
+    post.timelineSortKey = buildTimelineSortKey(state, post.dayId, post.gameTime);
     post.metrics = normalizeMetrics(post.metrics);
     post.replies ||= [];
     post.isAnonymous = post.isAnonymous === true;
@@ -417,6 +421,81 @@ function normalizeCalendarDayId(dayId) {
 function calendarDayDisplay(day) {
   if (!day) return "";
   return `${day.dateLabel || ""} ${day.label || ""}`.trim();
+}
+
+function resolveTimelineDayId(state, value) {
+  const input = String(value || "").trim();
+  if (!input) return "";
+  const normalized = normalizeCalendarDayId(input);
+  const days = state.calendarDays || [];
+  const direct = days.find((day) => day.id === normalized);
+  if (direct) return direct.id;
+
+  const folded = input.toLowerCase();
+  const matched = days.find((day) => {
+    const labels = [
+      day.dateLabel,
+      calendarDayDisplay(day),
+      `${day.month}/${day.dayOfMonth}`,
+      `${day.month}月${day.dayOfMonth}日`
+    ];
+    return labels.some((label) => String(label || "").trim().toLowerCase() === folded);
+  });
+  return matched?.id || "";
+}
+
+function inferTimelineDayId(state, post) {
+  const existing = resolveTimelineDayId(state, post.dayId);
+  if (existing) return existing;
+
+  const text = String(post.gameTime || "").toLowerCase();
+  if (!text) return "";
+  const matched = (state.calendarDays || []).find((day) => {
+    const labels = [day.dateLabel, calendarDayDisplay(day)].filter(Boolean);
+    return labels.some((label) => text.includes(String(label).toLowerCase()));
+  });
+  return matched?.id || "";
+}
+
+function parseGameTimeMinutes(value) {
+  const text = String(value || "");
+  let match = text.match(/([01]?\d|2[0-3])\s*[:：]\s*([0-5]\d)/);
+  if (!match) match = text.match(/([01]?\d|2[0-3])\s*(?:時|时|点|點)\s*([0-5]?\d)?\s*(?:分)?/);
+  if (!match) return null;
+
+  let hour = Number(match[1]);
+  const minute = Number(match[2] || 0);
+  if (!Number.isInteger(hour) || !Number.isInteger(minute) || minute < 0 || minute > 59) return null;
+  const isPm = /午後|下午|pm/i.test(text);
+  const isAm = /午前|上午|am/i.test(text);
+  if (isPm && hour < 12) hour += 12;
+  if (isAm && hour === 12) hour = 0;
+  if (hour < 0 || hour > 23) return null;
+  return hour * 60 + minute;
+}
+
+function buildTimelineSortKey(state, dayId, gameTime) {
+  const minutes = parseGameTimeMinutes(gameTime);
+  if (minutes === null) return null;
+  const day = (state.calendarDays || []).find((item) => item.id === resolveTimelineDayId(state, dayId));
+  const dayNumber = Number.isFinite(Number(day?.dayNumber)) ? Number(day.dayNumber) : 0;
+  return dayNumber * 1440 + minutes;
+}
+
+function timelineSortValue(post) {
+  const rawValue = post?.timelineSortKey;
+  if (rawValue === null || rawValue === undefined || rawValue === "") return null;
+  const value = Number(rawValue);
+  return Number.isFinite(value) ? value : null;
+}
+
+function compareTimelinePosts(a, b) {
+  const aSort = timelineSortValue(a);
+  const bSort = timelineSortValue(b);
+  if (aSort !== null && bSort !== null && aSort !== bSort) return bSort - aSort;
+  if (aSort !== null && bSort === null) return -1;
+  if (aSort === null && bSort !== null) return 1;
+  return String(b.createdAt || "").localeCompare(String(a.createdAt || ""));
 }
 
 function calendarDayLooksCorrupt(day) {
@@ -1980,6 +2059,11 @@ async function routeApi(req, res, url) {
     }
 
     if (!content && !attachment) return sendJson(res, 400, { error: "Post content or image is required." });
+    const requestedDayId = body.dayId !== undefined ? resolveTimelineDayId(state, body.dayId) : "";
+    if (body.dayId && !requestedDayId) return sendJson(res, 400, { error: "Timeline day was not found." });
+    const dayId = requestedDayId || state.settings.currentDayId || "";
+    const gameTime = String(body.gameTime || state.settings.gameTime).trim();
+    const createdAt = new Date().toISOString();
     if (isAdmin(req)) pushUndo(state, "create_post", `以 ${author.name} 发布帖子`, ["posts"], { authorId: author.id });
     state.posts.push({
       id: id("post"),
@@ -1987,8 +2071,10 @@ async function routeApi(req, res, url) {
       content,
       attachment,
       isAnonymous: body.isAnonymous === true,
-      gameTime: String(body.gameTime || state.settings.gameTime).trim(),
-      createdAt: new Date().toISOString(),
+      dayId,
+      gameTime,
+      timelineSortKey: buildTimelineSortKey(state, dayId, gameTime),
+      createdAt,
       metrics: normalizeMetrics(body.metrics),
       replies: []
     });
@@ -2062,6 +2148,14 @@ async function routeApi(req, res, url) {
       if (body.authorId && findCharacter(state, body.authorId)) post.authorId = body.authorId;
       if (body.content !== undefined) post.content = String(body.content).trim();
       if (body.gameTime !== undefined) post.gameTime = String(body.gameTime).trim();
+      if (body.dayId !== undefined) {
+        const nextDayId = resolveTimelineDayId(state, body.dayId);
+        if (body.dayId && !nextDayId) return sendJson(res, 400, { error: "Timeline day was not found." });
+        post.dayId = nextDayId;
+      }
+      if (body.gameTime !== undefined || body.dayId !== undefined) {
+        post.timelineSortKey = buildTimelineSortKey(state, post.dayId, post.gameTime);
+      }
       if (body.metrics !== undefined) post.metrics = normalizeMetrics(body.metrics);
       writeState(state);
       sendJson(res, 200, publicState(state));
@@ -2257,7 +2351,7 @@ function exportMarkdown(state) {
   }
 
   lines.push("## SNS 时间线", "");
-  for (const post of [...state.posts].sort((a, b) => String(a.createdAt).localeCompare(String(b.createdAt)))) {
+  for (const post of [...state.posts].sort(compareTimelinePosts)) {
     const author = byId.get(post.authorId);
     const authorLabel = post.isAnonymous
       ? `匿名${author ? `（${author.name} ${author.handle || ""}）` : ""}`
