@@ -3076,26 +3076,58 @@ select:focus {
 
 .chat-character-result {
   display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+  align-items: center;
+  border: 1px solid rgba(15, 95, 63, 0.1);
+  border-radius: var(--radius-sm);
+  background: rgba(255, 255, 255, 0.64);
+  padding: 6px 7px;
+}
+
+.chat-character-profile {
+  display: grid;
   grid-template-columns: auto minmax(0, 1fr);
   gap: 8px;
   align-items: center;
   width: 100%;
-  border: 1px solid rgba(15, 95, 63, 0.1);
+  min-width: 0;
+  border: 0;
   border-radius: var(--radius-sm);
-  background: rgba(255, 255, 255, 0.64);
+  background: transparent;
   color: var(--ink);
-  padding: 6px 7px;
+  padding: 0;
   text-align: left;
 }
 
-.chat-character-result .avatar {
+.chat-character-actions {
+  display: flex;
+  justify-content: flex-end;
+  min-width: 0;
+}
+
+.search-status-pill {
+  display: inline-flex;
+  align-items: center;
+  min-height: 28px;
+  border: 1px solid rgba(15, 95, 63, 0.14);
+  border-radius: 999px;
+  background: rgba(217, 231, 191, 0.5);
+  color: #355346;
+  padding: 4px 8px;
+  font-size: 12px;
+  font-weight: 850;
+  white-space: nowrap;
+}
+
+.chat-character-profile .avatar {
   width: 30px;
   height: 30px;
   font-size: 11px;
 }
 
-.chat-character-result .name,
-.chat-character-result .handle,
+.chat-character-profile .name,
+.chat-character-profile .handle,
 .room-match-line {
   min-width: 0;
   overflow: hidden;
@@ -3579,6 +3611,20 @@ select:focus {
 
   .room-entry {
     grid-template-columns: 48px minmax(0, 1fr);
+  }
+
+  .chat-character-result {
+    grid-template-columns: 1fr;
+  }
+
+  .chat-character-actions {
+    justify-content: stretch;
+  }
+
+  .chat-character-actions .compact-action,
+  .chat-character-actions .search-status-pill {
+    width: 100%;
+    justify-content: center;
   }
 
   .pin-chat-button {

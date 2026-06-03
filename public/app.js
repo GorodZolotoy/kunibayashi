@@ -3309,19 +3309,42 @@ function renderChatCharacterMatches(matches) {
   if (!query || !matches.length) return "";
   return `
     <div class="chat-character-results" aria-label="匹配角色">
-      <div class="mini-title">角色</div>
+      <div class="mini-title">人物搜索</div>
       ${matches.map((character) => `
-        <button class="chat-character-result" type="button" data-action="view-profile" data-character-id="${escapeAttr(character.id)}">
-          ${renderAvatar(character)}
-          <span class="name-block">
-            <span class="name">${escapeHtml(character.name)}</span>
-            <span class="handle">${escapeHtml(character.handle || "")}</span>
-            ${renderCharacterTags(character)}
-          </span>
-        </button>
+        <div class="chat-character-result">
+          <button class="chat-character-profile" type="button" data-action="view-profile" data-character-id="${escapeAttr(character.id)}">
+            ${renderAvatar(character)}
+            <span class="name-block">
+              <span class="name">${escapeHtml(character.name)}</span>
+              <span class="handle">${escapeHtml(character.handle || "")}</span>
+              ${renderCharacterTags(character)}
+            </span>
+          </button>
+          <div class="chat-character-actions">
+            ${renderChatCharacterAction(character)}
+          </div>
+        </div>
       `).join("")}
     </div>
   `;
+}
+
+function renderChatCharacterAction(character) {
+  const actor = currentActor();
+  if (!actor) return `<span class="search-status-pill">登录后关注</span>`;
+  if (actor.id === character.id) return `<span class="search-status-pill">当前</span>`;
+  if (isPreviewMode()) return `<span class="search-status-pill">${escapeHtml(relationshipLabel(character.id))}</span>`;
+  if (isGmAdminMode()) {
+    return `<button class="secondary-button compact-action" type="button" data-action="open-direct-chat" data-character-id="${escapeAttr(character.id)}">私信</button>`;
+  }
+
+  const status = relationshipStatus(character.id);
+  if (status === "accepted") {
+    return `<button class="primary-button compact-action" type="button" data-action="open-direct-chat" data-character-id="${escapeAttr(character.id)}">私信</button>`;
+  }
+  if (status === "outgoing_pending") return `<span class="search-status-pill">等待 GM</span>`;
+  if (status === "incoming_pending") return `<span class="search-status-pill">对方请求中</span>`;
+  return `<button class="primary-button compact-action" type="button" data-action="request-follow" data-character-id="${escapeAttr(character.id)}">关注</button>`;
 }
 
 function chatSearchCharacterMatches(chats) {
@@ -3343,9 +3366,9 @@ function chatSearchCharacterCandidates(chats) {
       if (character.active !== false) ids.add(character.id);
     }
   } else {
-    const actor = currentActor();
-    if (actor) ids.add(actor.id);
-    for (const contact of acceptedContacts()) ids.add(contact.id);
+    for (const character of stateBag.data?.characters || []) {
+      if (character.active !== false) ids.add(character.id);
+    }
   }
 
   return [...ids]
