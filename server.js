@@ -1536,6 +1536,18 @@ async function routeApi(req, res, url) {
     return;
   }
 
+  if (req.method === "DELETE" && url.pathname.startsWith("/api/emojis/")) {
+    if (!requireAdmin(req, res)) return;
+    const emojiId = decodeURIComponent(url.pathname.split("/").pop());
+    const emoji = (state.emojis || []).find((item) => item.id === emojiId);
+    if (!emoji) return sendJson(res, 404, { error: "Emoji not found." });
+    pushUndo(state, "delete_emoji", `Delete emoji :${emoji.shortcode}:`, ["emojis"], { emojiId, shortcode: emoji.shortcode });
+    state.emojis = (state.emojis || []).filter((item) => item.id !== emoji.id);
+    writeState(state);
+    sendJson(res, 200, publicState(state));
+    return;
+  }
+
   if (req.method === "PATCH" && url.pathname === "/api/settings") {
     if (!requireAdmin(req, res)) return;
     pushUndo(state, "edit_settings", "编辑时间和站点设置", ["settings"]);
@@ -2461,11 +2473,16 @@ ensureState();
 
 http.createServer((req, res) => {
   const url = new URL(req.url, `http://${req.headers.host || "localhost"}`);
+  if (req.method === "GET" && (url.pathname === "/healthz" || url.pathname === "/api/health")) {
+    sendJson(res, 200, { ok: true });
+    return;
+  }
   if (!url.pathname.startsWith("/api/")) {
     serveStatic(req, res, url);
     return;
   }
-  requestContext.run({ adminView: isAdmin(req) }, () => {
+  const forceAccountView = String(req.headers["x-view-mode"] || "").toLowerCase() === "account";
+  requestContext.run({ adminView: isAdmin(req) && !forceAccountView }, () => {
     routeApi(req, res, url).catch((error) => {
       console.error(error);
       sendJson(res, 500, { error: error.message || "Internal server error." });

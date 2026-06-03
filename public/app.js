@@ -17,6 +17,7 @@ const stateBag = {
   previewActorId: "",
   previewPickActorId: "",
   chatSearch: localStorage.getItem("kokubayashi.chatSearch") || "",
+  chatSearchDraft: localStorage.getItem("kokubayashi.chatSearch") || "",
   feedFilter: normalizeFeedFilter(localStorage.getItem("kokubayashi.feedFilter") || "all"),
   feedSearch: localStorage.getItem("kokubayashi.feedSearch") || "",
   feedHashtag: normalizeHashtag(localStorage.getItem("kokubayashi.feedHashtag") || ""),
@@ -33,6 +34,7 @@ const stateBag = {
   gmPin: localStorage.getItem("kokubayashi.gmPin") || "",
   accountTokens: readAccountTokens(),
   gmUnlocked: localStorage.getItem("kokubayashi.gmUnlocked") === "true",
+  gmAccountView: localStorage.getItem("kokubayashi.gmAccountView") === "true",
   refreshInFlight: false
 };
 
@@ -155,9 +157,7 @@ function bindGlobalEvents() {
       return;
     }
     if (target.id === "chat-search") {
-      stateBag.chatSearch = target.value;
-      localStorage.setItem("kokubayashi.chatSearch", stateBag.chatSearch);
-      renderChats();
+      stateBag.chatSearchDraft = target.value;
       return;
     }
     if (target.id === "feed-search") {
@@ -178,6 +178,10 @@ function bindGlobalEvents() {
     if (event.target?.id === "quick-actor-search" && event.key === "Enter") {
       event.preventDefault();
       applyQuickActorSearch();
+    }
+    if (event.target?.id === "chat-search" && event.key === "Enter") {
+      event.preventDefault();
+      applyChatSearch();
     }
     if (event.target?.id === "quick-game-time" && event.key === "Enter") {
       event.preventDefault();
@@ -204,7 +208,9 @@ async function handleAction(target) {
   }
   if (action === "start-player-preview") return startPlayerPreview();
   if (action === "stop-player-preview") return stopPlayerPreview();
+  if (action === "toggle-gm-account-view") return toggleGmAccountView();
   if (action === "apply-quick-actor-search") return applyQuickActorSearch();
+  if (action === "apply-chat-search") return applyChatSearch();
   if (action === "quick-adjust-time") return quickAdjustTime(target.dataset.minutes);
   if (action === "quick-save-time") return quickSaveTime();
   if (action === "publish-post") return publishPost();
@@ -262,6 +268,7 @@ async function handleAction(target) {
   if (action === "logout-account") return logoutAccount(target.dataset.characterId);
   if (action === "update-avatar") return updateAvatar();
   if (action === "upload-emoji") return uploadEmoji();
+  if (action === "delete-emoji") return deleteEmoji(target.dataset.emojiId);
   if (action === "insert-emoji") return insertEmoji(target.dataset.target, target.dataset.value);
   if (action === "view-profile") return viewProfile(target.dataset.characterId);
   if (action === "close-profile") return closeProfile();
@@ -336,7 +343,7 @@ function ensureChat() {
 }
 
 function setTab(tab) {
-  if (isPreviewMode() && tab === "gm") tab = "feed";
+  if (stateBag.gmUnlocked && !isGmAdminMode() && tab === "gm") tab = "feed";
   stateBag.tab = tab;
   localStorage.setItem("kokubayashi.tab", tab);
   render();
@@ -344,6 +351,10 @@ function setTab(tab) {
 
 function render() {
   if (!stateBag.data) return;
+  if (stateBag.gmUnlocked && !isGmAdminMode() && stateBag.tab === "gm") {
+    stateBag.tab = "feed";
+    localStorage.setItem("kokubayashi.tab", stateBag.tab);
+  }
   renderShell();
   if (stateBag.tab === "feed") renderFeed();
   if (stateBag.tab === "bulletins") renderBulletins();
@@ -405,14 +416,20 @@ function renderShell() {
   els.clockLine.textContent = `${state.settings.schoolDay || ""} ${state.settings.gameTime || ""}`.trim();
   els.brandSubtitle.textContent = state.settings.chatName || "K-LINE";
   const previewActor = currentPreviewActor();
-  els.gmBadge.textContent = isPreviewMode() ? `玩家预览：${previewActor?.name || ""}` : (stateBag.gmUnlocked ? "GM 已解锁" : "玩家模式");
+  const gmAccountActor = isGmAccountView() ? currentActor() : null;
+  els.gmBadge.textContent = isPreviewMode()
+    ? `玩家预览：${previewActor?.name || ""}`
+    : (isGmAccountView()
+        ? `账号视角：${gmAccountActor?.name || "未选择"}`
+        : (stateBag.gmUnlocked ? "GM 已解锁" : "玩家模式"));
   els.gmBadge.classList.toggle("enabled", isGmAdminMode());
   els.gmBadge.classList.toggle("preview", isPreviewMode());
+  els.gmBadge.classList.toggle("account-view", isGmAccountView());
 
   document.querySelectorAll("[data-tab]").forEach((button) => {
     const label = tabNames[button.dataset.tab] || button.dataset.tab;
     const badge = navBadgeFor(button.dataset.tab);
-    button.hidden = isPreviewMode() && button.dataset.tab === "gm";
+    button.hidden = stateBag.gmUnlocked && !isGmAdminMode() && button.dataset.tab === "gm";
     button.innerHTML = `<span>${escapeHtml(label)}</span>${badge ? `<span class="nav-badge">${badge}</span>` : ""}`;
     button.classList.toggle("active", button.dataset.tab === stateBag.tab);
   });
@@ -438,6 +455,7 @@ function renderShell() {
   els.accountTools.innerHTML = renderAccountTools();
   els.quickbar.hidden = !stateBag.gmUnlocked;
   els.quickbar.innerHTML = stateBag.gmUnlocked ? renderGmQuickbar() : "";
+  renderFloatingGmToggle();
 }
 
 function filterActorsForPicker(actors) {
@@ -484,19 +502,21 @@ function renderGmQuickbar() {
     ? stateBag.previewPickActorId
     : (previewCandidates[0]?.id || "");
   stateBag.previewPickActorId = previewPick;
-
-  return `
-    <div class="quickbar-grid">
-      <div class="quickbar-block role-block">
-        <div class="mini-title">快速扮演</div>
-        <div class="quick-search-row">
-          <input id="quick-actor-search" value="${escapeAttr(stateBag.quickActorSearchDraft)}" placeholder="搜索角色 / @handle / 标签">
-          <button class="secondary-button compact-action" type="button" data-action="apply-quick-actor-search">搜索</button>
-        </div>
-        <select id="quick-actor-select" aria-label="快速切换扮演角色">
-          ${roleOptions.map((actor) => `<option value="${escapeAttr(actor.id)}" ${actor.id === stateBag.actorId ? "selected" : ""}>${escapeHtml(actor.name)} ${escapeHtml(actor.handle || "")}</option>`).join("")}
-        </select>
+  const accountView = isGmAccountView();
+  const selectedActor = getActor(stateBag.actorId);
+  const modeLabel = accountView
+    ? `普通账号视角：${selectedActor?.name || "未选择角色"}`
+    : "GM 视角";
+  const modeHint = accountView
+    ? "按玩家可见规则显示；发言仍由 GM PIN 授权。"
+    : "显示 GM 后台、快速时间与玩家预览工具。";
+  const modeButtonLabel = accountView ? "切回 GM 视角" : "普通账号视角";
+  const adminQuickTools = accountView ? `
+      <div class="quickbar-block account-view-note">
+        <div class="mini-title">账号视角已开启</div>
+        <div class="hint">GM 后台已隐藏。选择一个角色后，可以像该账号一样发帖、聊天和查看资料。</div>
       </div>
+    ` : `
       <div class="quickbar-block time-block">
         <div class="mini-title">快速时间</div>
         <div class="quick-time-row">
@@ -520,8 +540,51 @@ function renderGmQuickbar() {
         </select>
         <button class="primary-button compact-action" type="button" data-action="start-player-preview" ${previewCandidates.length ? "" : "disabled"}>预览</button>
       </div>
+    `;
+
+  return `
+    <div class="quickbar-modebar">
+      <div>
+        <div class="mini-title">视角</div>
+        <div class="hint">${escapeHtml(modeLabel)} · ${escapeHtml(modeHint)}</div>
+      </div>
+      <button class="${accountView ? "primary-button" : "secondary-button"} compact-action" type="button" data-action="toggle-gm-account-view">${escapeHtml(modeButtonLabel)}</button>
+    </div>
+    <div class="quickbar-grid${accountView ? " account-view-grid" : ""}">
+      <div class="quickbar-block role-block">
+        <div class="mini-title">快速扮演</div>
+        <div class="quick-search-row">
+          <input id="quick-actor-search" value="${escapeAttr(stateBag.quickActorSearchDraft)}" placeholder="搜索角色 / @handle / 标签">
+          <button class="secondary-button compact-action" type="button" data-action="apply-quick-actor-search">搜索</button>
+        </div>
+        <select id="quick-actor-select" aria-label="快速切换扮演角色">
+          ${roleOptions.map((actor) => `<option value="${escapeAttr(actor.id)}" ${actor.id === stateBag.actorId ? "selected" : ""}>${escapeHtml(actor.name)} ${escapeHtml(actor.handle || "")}</option>`).join("")}
+        </select>
+      </div>
+      ${adminQuickTools}
     </div>
   `;
+}
+
+function renderFloatingGmToggle() {
+  let button = document.getElementById("gm-view-float");
+  if (!stateBag.gmUnlocked || isPreviewMode()) {
+    button?.remove();
+    return;
+  }
+  if (!button) {
+    button = document.createElement("button");
+    button.id = "gm-view-float";
+    button.type = "button";
+    button.dataset.action = "toggle-gm-account-view";
+    document.body.appendChild(button);
+  }
+  const actor = isGmAccountView() ? currentActor() : null;
+  button.className = `gm-view-float ${isGmAccountView() ? "account-view" : "gm-view"}`;
+  button.textContent = isGmAccountView() ? "切回 GM 视角" : "普通账号视角";
+  button.title = isGmAccountView()
+    ? `账号视角：${actor?.name || "未选择角色"}`
+    : "切换到普通账号视角";
 }
 
 function filterActorsForQuickbar(actors) {
@@ -542,12 +605,25 @@ function applyQuickActorSearch() {
   renderShell();
 }
 
+function applyChatSearch() {
+  const input = document.getElementById("chat-search");
+  const query = input ? input.value : stateBag.chatSearchDraft;
+  stateBag.chatSearchDraft = query;
+  stateBag.chatSearch = query;
+  localStorage.setItem("kokubayashi.chatSearch", stateBag.chatSearch);
+  renderChats();
+}
+
 function isPreviewMode() {
   return stateBag.gmUnlocked && Boolean(stateBag.previewActorId);
 }
 
+function isGmAccountView() {
+  return stateBag.gmUnlocked && stateBag.gmAccountView === true && !isPreviewMode();
+}
+
 function isGmAdminMode() {
-  return stateBag.gmUnlocked && !isPreviewMode();
+  return stateBag.gmUnlocked && !isPreviewMode() && !isGmAccountView();
 }
 
 function effectiveActorId() {
@@ -879,7 +955,7 @@ function renderReply(postId, reply) {
 }
 
 function renderPlayerChatTools() {
-  if (stateBag.gmUnlocked || isPreviewMode()) return "";
+  if (isGmAdminMode() || isPreviewMode()) return "";
   const actor = currentActor();
   if (!actor) return "";
   const contacts = acceptedContacts();
@@ -930,7 +1006,10 @@ function renderChats() {
     <div class="chat-layout ${stateBag.memberDrawerChatId === active?.id ? "with-drawer" : ""}">
       <aside class="room-list">
         ${renderPlayerChatTools()}
-        <input id="chat-search" class="room-search" value="${escapeAttr(stateBag.chatSearch)}" placeholder="搜索聊天 / 成员">
+        <div class="chat-search-row">
+          <input id="chat-search" class="room-search" value="${escapeAttr(stateBag.chatSearchDraft)}" placeholder="搜索聊天 / 成员 / 角色">
+          <button class="secondary-button compact-action" type="button" data-action="apply-chat-search">搜索</button>
+        </div>
         ${renderChatCharacterMatches(characterMatches)}
         ${roomChats.map((chat) => {
           const unread = unreadMessagesForChat(chat).length;
@@ -1012,7 +1091,7 @@ function renderChats() {
 
 function renderChatMemberRequestPanel(chat) {
   const actor = currentActor();
-  if (!chat || !actor || stateBag.gmUnlocked) return "";
+  if (!chat || !actor || isGmAdminMode() || isPreviewMode()) return "";
   if (chat.type === "direct" || chat.isPublic || !chat.memberIds.includes(actor.id)) return "";
   const isOpen = stateBag.chatMemberPanelChatId === chat.id;
 
@@ -1286,6 +1365,22 @@ function renderAccountTools() {
   if (isGmAdminMode()) {
     return `<div class="hint">GM 模式可使用全部角色。</div>`;
   }
+  if (isGmAccountView()) {
+    const actor = currentActor();
+    return `
+      <div class="mini-form">
+        <div class="mini-title">普通账号视角</div>
+        <div class="account-session-card">
+          ${renderAvatar(actor)}
+          <div class="name-block">
+            <div class="name">${escapeHtml(actor?.name || "未选择角色")}</div>
+            <div class="handle">${escapeHtml(actor?.handle || "使用顶部快速扮演切换身份")}</div>
+          </div>
+        </div>
+        <button class="primary-button" type="button" data-action="toggle-gm-account-view">切回 GM 视角</button>
+      </div>
+    `;
+  }
 
   const actor = currentActor();
   const savedActors = availableActors();
@@ -1418,6 +1513,32 @@ function renderChatMemberRequest(request) {
         <button class="danger-button" type="button" data-action="reject-chat-member-request" data-request-id="${escapeAttr(request.id)}">拒绝</button>
       </div>
     </div>
+  `;
+}
+
+function renderGmEmojiManager() {
+  const emojis = stateBag.data?.emojis || [];
+  return `
+    <section>
+      <div class="section-title">自定义 Emoji</div>
+      <div class="emoji-manager-list">
+        ${emojis.map((emoji) => {
+          const owner = getActor(emoji.ownerId);
+          return `
+            <div class="emoji-manager-row">
+              <div class="emoji-manager-preview">
+                <img src="${escapeAttr(emoji.imageData)}" alt=":${escapeAttr(emoji.shortcode)}:">
+                <div class="name-block">
+                  <div class="name">:${escapeHtml(emoji.shortcode)}:</div>
+                  <div class="handle">${escapeHtml(owner ? `${owner.name} ${owner.handle || ""}` : "GM / unknown")}</div>
+                </div>
+              </div>
+              <button class="danger-button compact-action" type="button" data-action="delete-emoji" data-emoji-id="${escapeAttr(emoji.id)}">删除</button>
+            </div>
+          `;
+        }).join("") || `<div class="hint">暂无上传的自定义 emoji。</div>`}
+      </div>
+    </section>
   `;
 }
 
@@ -1946,6 +2067,7 @@ function renderGm() {
       </section>
 
       ${renderGmInbox()}
+      ${renderGmEmojiManager()}
       ${renderBulletinComposer(chars, days)}
       ${renderCalendarEventManager(days, gmDay)}
 
@@ -2303,7 +2425,9 @@ async function unlockGm() {
 function lockGm() {
   stateBag.gmUnlocked = false;
   stateBag.previewActorId = "";
+  stateBag.gmAccountView = false;
   localStorage.setItem("kokubayashi.gmUnlocked", "false");
+  localStorage.removeItem("kokubayashi.gmAccountView");
   render();
 }
 
@@ -2411,6 +2535,19 @@ function formatClockTime(totalMinutes) {
   const hour = Math.floor(minutes / 60);
   const minute = minutes % 60;
   return `${String(hour).padStart(2, "0")}:${String(minute).padStart(2, "0")}`;
+}
+
+async function toggleGmAccountView() {
+  if (!stateBag.gmUnlocked) return showNotice("请先解锁 GM。");
+  stateBag.previewActorId = "";
+  stateBag.gmAccountView = !stateBag.gmAccountView;
+  localStorage.setItem("kokubayashi.gmAccountView", String(stateBag.gmAccountView));
+  if (stateBag.gmAccountView && stateBag.tab === "gm") {
+    stateBag.tab = "feed";
+    localStorage.setItem("kokubayashi.tab", stateBag.tab);
+  }
+  showNotice(stateBag.gmAccountView ? "已切换到普通账号视角。" : "已切换到 GM 视角。");
+  await refresh(true);
 }
 
 function startPlayerPreview() {
@@ -2908,6 +3045,17 @@ async function uploadEmoji() {
   await refresh(true);
 }
 
+async function deleteEmoji(emojiId) {
+  if (!isGmAdminMode()) return showNotice("请先切回 GM 视角。");
+  if (!emojiId) return;
+  await api(`/api/emojis/${encodeURIComponent(emojiId)}`, {
+    method: "DELETE",
+    admin: true
+  });
+  showNotice("Emoji 已删除。");
+  await refresh(true);
+}
+
 function insertEmoji(targetId, value) {
   const target = document.getElementById(targetId);
   if (!target) return;
@@ -3104,12 +3252,15 @@ async function createPlayerPrivateChat() {
 
 async function api(path, options = {}) {
   const headers = { "Content-Type": "application/json" };
-  if ((isGmAdminMode() || options.admin) && stateBag.gmPin) headers["X-GM-PIN"] = stateBag.gmPin;
+  const method = String(options.method || "GET").toUpperCase();
+  const useGmAuth = (isGmAdminMode() || options.admin || (isGmAccountView() && method !== "GET")) && stateBag.gmPin;
+  if (useGmAuth) headers["X-GM-PIN"] = stateBag.gmPin;
+  if (isGmAccountView() && !options.admin) headers["X-View-Mode"] = "account";
   if (!stateBag.gmUnlocked && stateBag.actorId && stateBag.accountTokens[stateBag.actorId]) {
     headers["X-Account-Token"] = stateBag.accountTokens[stateBag.actorId];
   }
   const response = await fetch(path, {
-    method: options.method || "GET",
+    method,
     headers,
     body: options.body ? JSON.stringify(options.body) : undefined
   });
@@ -3126,7 +3277,7 @@ function availableActors() {
     const actor = currentPreviewActor();
     return actor ? [actor] : [];
   }
-  if (isGmAdminMode()) return chars;
+  if (stateBag.gmUnlocked) return chars;
   const ownedIds = new Set(Object.keys(stateBag.accountTokens));
   return chars.filter((item) => item.type === "account" && ownedIds.has(item.id));
 }
@@ -3545,7 +3696,7 @@ function relationshipStatus(targetId) {
 function currentActor() {
   if (isPreviewMode()) return currentPreviewActor();
   if (!stateBag.actorId) return null;
-  if (isGmAdminMode()) return getActor(stateBag.actorId);
+  if (stateBag.gmUnlocked) return getActor(stateBag.actorId);
   return availableActors().find((actor) => actor.id === stateBag.actorId) || null;
 }
 
