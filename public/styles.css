@@ -3707,3 +3707,137 @@ select:focus {
     max-height: 150px;
   }
 }
+
+@media (max-width: 880px) {
+  body.chat-tab {
+    height: 100dvh;
+    overflow: hidden;
+  }
+
+  body.chat-tab .app-shell {
+    height: 100dvh;
+    min-height: 100dvh;
+    grid-template-rows: minmax(0, 1fr);
+    padding-bottom: 62px;
+    overflow: hidden;
+  }
+
+  body.chat-tab .side-panel,
+  body.chat-tab .gm-quickbar {
+    display: none;
+  }
+
+  body.chat-tab .workspace {
+    display: grid;
+    grid-template-rows: auto minmax(0, 1fr);
+    gap: 8px;
+    height: 100%;
+    min-height: 0;
+    padding: 8px;
+    overflow: hidden;
+  }
+
+  body.chat-tab .top-bar {
+    min-height: 44px;
+    padding: 8px 10px;
+    align-items: center;
+  }
+
+  body.chat-tab .gm-badge {
+    display: none;
+  }
+
+  body.chat-tab .gm-view-float {
+    top: 10px;
+    right: 12px;
+    bottom: auto;
+    min-width: 112px;
+    min-height: 36px;
+    padding: 7px 10px;
+  }
+
+  body.chat-tab .view-title {
+    font-size: 18px;
+  }
+
+  body.chat-tab .clock-line {
+    max-width: 56vw;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  body.chat-tab .view-root {
+    min-height: 0;
+    overflow: hidden;
+  }
+
+  body.chat-tab .chat-layout,
+  body.chat-tab .chat-layout.with-drawer {
+    height: 100%;
+    min-height: 0;
+    grid-template-rows: auto minmax(0, 1fr);
+    overflow: hidden;
+  }
+
+  body.chat-tab .chat-layout > .room-list {
+    height: auto;
+    max-height: clamp(72px, 15dvh, 92px);
+    min-height: 0;
+  }
+
+  body.chat-tab .chat-layout > .thread,
+  body.chat-tab .chat-layout > .member-drawer {
+    height: auto;
+    min-height: 0;
+    max-height: none;
+  }
+
+  body.chat-tab .thread {
+    min-height: 0;
+  }
+
+  body.chat-tab .thread-header {
+    min-height: 0;
+  }
+
+  body.chat-tab .messages {
+    min-height: 0;
+    overflow-y: auto;
+  }
+
+  body.chat-tab .message-form {
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: 5px;
+    padding: 5px;
+  }
+
+  body.chat-tab .message-form textarea {
+    height: 40px;
+    min-height: 40px;
+    max-height: 64px;
+    line-height: 1.35;
+    padding: 8px 9px;
+  }
+
+  body.chat-tab .message-form > .primary-button {
+    min-height: 40px;
+    padding-inline: 9px;
+  }
+
+  body.chat-tab .message-tools {
+    max-height: 32px;
+  }
+
+  body.chat-tab .message-tools .emoji-button {
+    width: 28px;
+    height: 28px;
+    font-size: 15px;
+  }
+
+  body.chat-tab .message-tools .file-picker,
+  body.chat-tab .message-tools .compact-checkbox {
+    min-height: 28px;
+    padding: 4px 7px;
+  }
+}

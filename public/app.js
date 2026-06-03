@@ -423,6 +423,7 @@ function hasDraftText() {
 
 function renderShell() {
   const state = stateBag.data;
+  document.body.classList.toggle("chat-tab", stateBag.tab === "chats");
   els.viewTitle.textContent = tabNames[stateBag.tab] || "时间线";
   els.clockLine.textContent = `${state.settings.schoolDay || ""} ${state.settings.gameTime || ""}`.trim();
   els.brandSubtitle.textContent = state.settings.chatName || "K-LINE";
