@@ -2151,6 +2151,7 @@ select:focus {
   width: 72px;
   height: 30px;
   background: linear-gradient(135deg, transparent 0 36%, rgba(15, 95, 63, 0.18) 36%);
+  pointer-events: none;
 }
 
 .section-title {
@@ -2957,6 +2958,8 @@ select:focus {
 }
 
 .gm-section-head {
+  position: relative;
+  z-index: 1;
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -2985,6 +2988,8 @@ select:focus {
 }
 
 .gm-section-body {
+  position: relative;
+  z-index: 1;
   display: grid;
   gap: 12px;
   margin-top: 12px;
