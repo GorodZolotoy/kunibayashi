@@ -658,12 +658,18 @@ textarea {
   gap: 10px;
 }
 
-.admin-row input {
+.admin-row input,
+.admin-row select {
   width: 96px;
 }
 
-.admin-row input.time-input {
+.admin-row input.time-input,
+.admin-row select.time-input {
   width: min(220px, 100%);
+}
+
+.admin-row .post-day-select {
+  width: min(260px, 100%);
 }
 
 .chat-layout {

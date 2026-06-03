@@ -617,7 +617,6 @@ function renderFeed() {
   const canPost = Boolean(actor) && !isPreviewMode();
   els.viewRoot.innerHTML = `
     <div class="feed-layout">
-      ${isGmAdminMode() ? renderPostDayDatalist() : ""}
       <section class="composer">
         <textarea id="post-content" maxlength="280" placeholder="${isPreviewMode() ? "玩家视角预览为只读" : (actor ? "现在发生了什么？" : "先创建玩家账号")}" ${canPost ? "" : "disabled"}></textarea>
         <div class="message-tools post-tools">
@@ -698,14 +697,6 @@ function rankedFeedHashtags() {
   return [...counts.entries()]
     .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0], "zh-CN"))
     .slice(0, 12);
-}
-
-function renderPostDayDatalist() {
-  return `
-    <datalist id="post-day-options">
-      ${calendarDays().map((day) => `<option value="${escapeAttr(dayOptionLabel(day))}">${escapeHtml(day.id)}</option>`).join("")}
-    </datalist>
-  `;
 }
 
 function sortTimelinePosts(posts) {
@@ -799,11 +790,15 @@ function renderPost(post) {
   ].filter(Boolean).join(" · ");
   const replies = post.replies || [];
   const replyOpen = !isPreviewMode() && stateBag.openReplyPostId === post.id;
-  const postDayValue = dayOptionLabel(getCalendarDay(post.dayId));
   const admin = isGmAdminMode() ? `
     <div class="admin-box">
       <div class="admin-row">
-        <label>日期 <input class="time-input" id="post-day-${post.id}" list="post-day-options" value="${escapeAttr(postDayValue)}" placeholder="未指定"></label>
+        <label>日期
+          <select class="time-input post-day-select" id="post-day-${post.id}">
+            <option value="">未指定</option>
+            ${renderDayOptions(calendarDays(), post.dayId)}
+          </select>
+        </label>
         <label>时间 <input class="time-input" id="post-time-${post.id}" value="${escapeAttr(post.gameTime)}"></label>
         <label>赞 <input id="post-likes-${post.id}" type="number" min="0" value="${post.metrics.likes}"></label>
         <label>转 <input id="post-reposts-${post.id}" type="number" min="0" value="${post.metrics.reposts}"></label>
