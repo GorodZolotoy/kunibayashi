@@ -179,6 +179,10 @@ function bindGlobalEvents() {
       event.preventDefault();
       applyQuickActorSearch();
     }
+    if (event.target?.id === "quick-game-time" && event.key === "Enter") {
+      event.preventDefault();
+      quickSaveTime().catch((error) => showNotice(error.message || "操作失败。"));
+    }
   });
 
   els.actorSelect.addEventListener("change", () => {
@@ -201,6 +205,7 @@ async function handleAction(target) {
   if (action === "start-player-preview") return startPlayerPreview();
   if (action === "stop-player-preview") return stopPlayerPreview();
   if (action === "apply-quick-actor-search") return applyQuickActorSearch();
+  if (action === "quick-adjust-time") return quickAdjustTime(target.dataset.minutes);
   if (action === "quick-save-time") return quickSaveTime();
   if (action === "publish-post") return publishPost();
   if (action === "like-post") return likePost(target.dataset.postId);
@@ -494,9 +499,19 @@ function renderGmQuickbar() {
       </div>
       <div class="quickbar-block time-block">
         <div class="mini-title">快速时间</div>
-        <input id="quick-school-day" value="${escapeAttr(stateBag.data.settings.schoolDay || "")}" placeholder="星期 / 日程">
-        <input id="quick-game-time" value="${escapeAttr(stateBag.data.settings.gameTime || "")}" placeholder="游戏时间">
-        <button class="secondary-button compact-action" type="button" data-action="quick-save-time">保存时间</button>
+        <div class="quick-time-row">
+          <select id="quick-current-day" aria-label="快速设置当前日期">
+            ${renderDayOptions(calendarDays(), stateBag.data.settings.currentDayId)}
+          </select>
+          <input id="quick-game-time" value="${escapeAttr(stateBag.data.settings.gameTime || "")}" placeholder="08:20">
+          <button class="secondary-button compact-action" type="button" data-action="quick-save-time">保存</button>
+        </div>
+        <div class="quick-time-steps" aria-label="快速调整游戏时间">
+          <button class="ghost-button compact-action" type="button" data-action="quick-adjust-time" data-minutes="-60">-1h</button>
+          <button class="ghost-button compact-action" type="button" data-action="quick-adjust-time" data-minutes="-15">-15m</button>
+          <button class="ghost-button compact-action" type="button" data-action="quick-adjust-time" data-minutes="15">+15m</button>
+          <button class="ghost-button compact-action" type="button" data-action="quick-adjust-time" data-minutes="60">+1h</button>
+        </div>
       </div>
       <div class="quickbar-block preview-block">
         <div class="mini-title">玩家视角</div>
@@ -2331,18 +2346,72 @@ async function saveSettings() {
 
 async function quickSaveTime() {
   if (!isGmAdminMode()) return showNotice("请先退出玩家预览再修改时间。");
+  const dayId = document.getElementById("quick-current-day")?.value || stateBag.data.settings.currentDayId;
+  const day = getCalendarDay(dayId);
+  if (!day) return showNotice("请选择有效的当前日期。");
   await api("/api/settings", {
     method: "PATCH",
     admin: true,
     body: {
       gameTime: document.getElementById("quick-game-time")?.value,
-      schoolDay: document.getElementById("quick-school-day")?.value,
+      currentDayId: day.id,
       feedName: stateBag.data.settings.feedName,
       chatName: stateBag.data.settings.chatName
     }
   });
   showNotice("快速时间已保存。");
   await refresh(true);
+}
+
+function quickAdjustTime(minutes) {
+  const input = document.getElementById("quick-game-time");
+  if (!input) return;
+  const next = shiftedGameTime(input.value || stateBag.data?.settings?.gameTime || "", Number(minutes));
+  if (!next) {
+    showNotice("先输入 08:20 这样的时间，再用快捷按钮调整。");
+    return;
+  }
+  input.value = next;
+  input.focus();
+}
+
+function shiftedGameTime(value, deltaMinutes) {
+  if (!Number.isFinite(deltaMinutes)) return "";
+  const text = String(value || "");
+  const parsed = findClockTime(text);
+  if (!parsed) return "";
+  const total = (parsed.hour * 60 + parsed.minute + deltaMinutes + 1440) % 1440;
+  const nextClock = formatClockTime(total);
+  return `${text.slice(0, parsed.start)}${nextClock}${text.slice(parsed.end)}`.trim();
+}
+
+function findClockTime(value) {
+  const text = String(value || "");
+  const patterns = [
+    /([01]?\d|2[0-3])\s*[:：]\s*([0-5]\d)/,
+    /([01]?\d|2[0-3])\s*(?:時|时|点|點)\s*([0-5]?\d)?\s*(?:分)?/
+  ];
+  for (const pattern of patterns) {
+    const match = pattern.exec(text);
+    if (!match) continue;
+    let hour = Number(match[1]);
+    const minute = Number(match[2] || 0);
+    if (!Number.isInteger(hour) || !Number.isInteger(minute) || minute < 0 || minute > 59) continue;
+    const isPm = /午後|下午|pm/i.test(text);
+    const isAm = /午前|上午|am/i.test(text);
+    if (isPm && hour < 12) hour += 12;
+    if (isAm && hour === 12) hour = 0;
+    if (hour < 0 || hour > 23) continue;
+    return { hour, minute, start: match.index, end: match.index + match[0].length };
+  }
+  return null;
+}
+
+function formatClockTime(totalMinutes) {
+  const minutes = ((totalMinutes % 1440) + 1440) % 1440;
+  const hour = Math.floor(minutes / 60);
+  const minute = minutes % 60;
+  return `${String(hour).padStart(2, "0")}:${String(minute).padStart(2, "0")}`;
 }
 
 function startPlayerPreview() {

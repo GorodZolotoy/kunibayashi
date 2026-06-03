@@ -1540,7 +1540,15 @@ async function routeApi(req, res, url) {
     if (!requireAdmin(req, res)) return;
     pushUndo(state, "edit_settings", "编辑时间和站点设置", ["settings"]);
     state.settings.gameTime = String(body.gameTime || state.settings.gameTime).trim();
-    state.settings.schoolDay = String(body.schoolDay || state.settings.schoolDay).trim();
+    if (body.currentDayId !== undefined) {
+      const requestedDayId = normalizeCalendarDayId(body.currentDayId);
+      const day = state.calendarDays.find((item) => item.id === requestedDayId);
+      if (!day) return sendJson(res, 404, { error: "Calendar day not found." });
+      state.settings.currentDayId = day.id;
+      state.settings.schoolDay = calendarDayDisplay(day);
+    } else {
+      state.settings.schoolDay = String(body.schoolDay || state.settings.schoolDay).trim();
+    }
     state.settings.feedName = String(body.feedName || state.settings.feedName).trim();
     state.settings.chatName = String(body.chatName || state.settings.chatName).trim();
     writeState(state);
