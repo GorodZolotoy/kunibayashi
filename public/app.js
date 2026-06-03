@@ -8,6 +8,8 @@ const stateBag = {
   gmScheduleDayId: localStorage.getItem("kokubayashi.gmScheduleDayId") || "",
   profileId: "",
   privateChatOpen: false,
+  chatMemberPanelChatId: "",
+  openReplyPostId: "",
   lastGmCreatedAccount: null,
   lastGmImportedAccounts: [],
   gmPin: localStorage.getItem("kokubayashi.gmPin") || "",
@@ -114,6 +116,7 @@ async function handleAction(target) {
   if (action === "publish-post") return publishPost();
   if (action === "like-post") return likePost(target.dataset.postId);
   if (action === "reply-post") return replyPost(target.dataset.postId);
+  if (action === "toggle-reply-composer") return toggleReplyComposer(target.dataset.postId);
   if (action === "delete-reply") return deleteReply(target.dataset.postId, target.dataset.replyId);
   if (action === "save-post") return savePost(target.dataset.postId);
   if (action === "delete-post") return deletePost(target.dataset.postId);
@@ -167,6 +170,7 @@ async function handleAction(target) {
   if (action === "reject-follow") return updateFollow(target.dataset.followId, "rejected");
   if (action === "request-chat-member-add") return requestChatMemberChange("add");
   if (action === "request-chat-member-remove") return requestChatMemberChange("remove");
+  if (action === "toggle-chat-member-panel") return toggleChatMemberPanel(target.dataset.chatId);
   if (action === "approve-chat-member-request") return updateChatMemberRequest(target.dataset.requestId, "accepted");
   if (action === "reject-chat-member-request") return updateChatMemberRequest(target.dataset.requestId, "rejected");
   if (action === "open-direct-chat") return openDirectChat(target.dataset.characterId);
@@ -388,6 +392,7 @@ function renderPost(post) {
     post.gameTime
   ].filter(Boolean).join(" · ");
   const replies = post.replies || [];
+  const replyOpen = stateBag.openReplyPostId === post.id;
   const admin = stateBag.gmUnlocked ? `
     <div class="admin-box">
       <div class="admin-row">
@@ -418,33 +423,46 @@ function renderPost(post) {
       ${post.attachment?.type === "image" ? renderImageAttachment(post.attachment, "post-image") : ""}
       <div class="post-actions">
         <button class="metric-button" type="button" data-action="like-post" data-post-id="${post.id}">喜欢 ${post.metrics.likes}</button>
+        <button class="metric-button" type="button" data-action="toggle-reply-composer" data-post-id="${post.id}">${replyOpen ? "收起回复" : `回复${replies.length ? ` ${replies.length}` : ""}`}</button>
         <span>转发 ${post.metrics.reposts}</span>
         <span>浏览 ${post.metrics.views}</span>
       </div>
       ${replies.length ? `<div class="reply-list">${replies.map((reply) => renderReply(post.id, reply)).join("")}</div>` : ""}
-      <div class="reply-composer">
-        <textarea id="reply-${post.id}" maxlength="240" placeholder="回复"></textarea>
-        ${renderEmojiBar(`reply-${post.id}`)}
-        <div class="reply-actions">
-          <button class="secondary-button" type="button" data-action="reply-post" data-post-id="${post.id}">回复</button>
+      ${replyOpen ? `
+        <div class="reply-composer expanded">
+          <textarea id="reply-${post.id}" maxlength="240" placeholder="回复"></textarea>
+          ${renderEmojiBar(`reply-${post.id}`)}
+          <div class="reply-actions">
+            <label class="checkbox-line compact-checkbox">
+              <input id="reply-anonymous-${post.id}" type="checkbox">
+              <span>匿名回复</span>
+            </label>
+            <button class="secondary-button" type="button" data-action="reply-post" data-post-id="${post.id}">发送回复</button>
+            <button class="ghost-button" type="button" data-action="toggle-reply-composer" data-post-id="${post.id}">收起</button>
+          </div>
         </div>
-      </div>
+      ` : ""}
       ${admin}
     </article>
   `;
 }
 
 function renderReply(postId, reply) {
+  const isAnonymous = reply.isAnonymous === true;
   const author = getActor(reply.authorId);
+  const profileId = isAnonymous && !stateBag.gmUnlocked ? "" : author?.id || "";
+  const displayName = isAnonymous
+    ? (stateBag.gmUnlocked && author ? `匿名（${author.name}）` : "匿名")
+    : (author?.name || "未知");
   return `
     <div class="reply">
-      <button class="profile-avatar-button" type="button" data-action="view-profile" data-character-id="${author?.id || ""}" ${author ? "" : "disabled"}>
-        ${renderAvatar(author)}
+      <button class="profile-avatar-button" type="button" data-action="view-profile" data-character-id="${profileId}" ${profileId ? "" : "disabled"}>
+        ${isAnonymous ? renderAnonymousAvatar() : renderAvatar(author)}
       </button>
       <div class="reply-body">
         <div class="meta">
-          <button class="inline-profile-link" type="button" data-action="view-profile" data-character-id="${author?.id || ""}" ${author ? "" : "disabled"}>
-            <strong>${escapeHtml(author?.name || "未知")}</strong>
+          <button class="inline-profile-link" type="button" data-action="view-profile" data-character-id="${profileId}" ${profileId ? "" : "disabled"}>
+            <strong>${escapeHtml(displayName)}</strong>
           </button>
           · ${escapeHtml(reply.gameTime)}
           ${canDeleteReply(reply) ? `
@@ -542,6 +560,7 @@ function renderChatMemberRequestPanel(chat) {
   const actor = currentActor();
   if (!chat || !actor || stateBag.gmUnlocked) return "";
   if (chat.type === "direct" || chat.isPublic || !chat.memberIds.includes(actor.id)) return "";
+  const isOpen = stateBag.chatMemberPanelChatId === chat.id;
 
   const inviteCandidates = acceptedContacts().filter((character) => !chat.memberIds.includes(character.id));
   const removeCandidates = chat.memberIds
@@ -551,25 +570,28 @@ function renderChatMemberRequestPanel(chat) {
   const removeOptions = removeCandidates.map((character) => `<option value="${escapeAttr(character.id)}">${escapeHtml(character.name)} ${escapeHtml(character.handle || "")}</option>`).join("");
 
   return `
-    <div class="chat-member-panel">
-      <div>
-        <div class="mini-title">成员申请</div>
-        <div class="hint">邀请或移除成员需要 GM 后台批准后才会生效。</div>
-      </div>
-      <div class="member-change-grid">
-        <label>邀请角色
-          <select id="chat-add-member" ${inviteCandidates.length ? "" : "disabled"}>
-            ${inviteOptions || `<option value="">暂无可邀请联系人</option>`}
-          </select>
-        </label>
-        <button class="secondary-button compact-action" type="button" data-action="request-chat-member-add" ${inviteCandidates.length ? "" : "disabled"}>申请邀请</button>
-        <label>移除角色
-          <select id="chat-remove-member" ${removeCandidates.length ? "" : "disabled"}>
-            ${removeOptions || `<option value="">暂无可移除成员</option>`}
-          </select>
-        </label>
-        <button class="danger-button compact-action" type="button" data-action="request-chat-member-remove" ${removeCandidates.length ? "" : "disabled"}>申请移除</button>
-      </div>
+    <div class="chat-member-panel ${isOpen ? "expanded" : "collapsed"}">
+      <button class="chat-member-toggle" type="button" data-action="toggle-chat-member-panel" data-chat-id="${escapeAttr(chat.id)}">
+        <span>成员申请</span>
+        <span class="hint">${isOpen ? "收起" : "邀请 / 移除"}</span>
+      </button>
+      ${isOpen ? `
+        <div class="member-change-grid">
+          <label>邀请角色
+            <select id="chat-add-member" ${inviteCandidates.length ? "" : "disabled"}>
+              ${inviteOptions || `<option value="">暂无可邀请联系人</option>`}
+            </select>
+          </label>
+          <button class="secondary-button compact-action" type="button" data-action="request-chat-member-add" ${inviteCandidates.length ? "" : "disabled"}>申请邀请</button>
+          <label>移除角色
+            <select id="chat-remove-member" ${removeCandidates.length ? "" : "disabled"}>
+              ${removeOptions || `<option value="">暂无可移除成员</option>`}
+            </select>
+          </label>
+          <button class="danger-button compact-action" type="button" data-action="request-chat-member-remove" ${removeCandidates.length ? "" : "disabled"}>申请移除</button>
+        </div>
+        <div class="hint">GM 批准后成员变化才会生效。</div>
+      ` : ""}
     </div>
   `;
 }
@@ -1494,16 +1516,25 @@ async function likePost(postId) {
   await refresh(true);
 }
 
+function toggleReplyComposer(postId) {
+  if (!postId) return;
+  stateBag.openReplyPostId = stateBag.openReplyPostId === postId ? "" : postId;
+  render();
+}
+
 async function replyPost(postId) {
   if (!currentActor()) return showNotice("请先创建或选择玩家账号。");
   const textarea = document.getElementById(`reply-${postId}`);
+  const anonymousInput = document.getElementById(`reply-anonymous-${postId}`);
   const content = textarea?.value.trim();
   if (!content) return showNotice("回复内容为空。");
   await api(`/api/feed/posts/${encodeURIComponent(postId)}/replies`, {
     method: "POST",
-    body: { authorId: stateBag.actorId, content }
+    body: { authorId: stateBag.actorId, content, isAnonymous: anonymousInput?.checked === true }
   });
   textarea.value = "";
+  if (anonymousInput) anonymousInput.checked = false;
+  stateBag.openReplyPostId = "";
   await refresh(true);
 }
 
@@ -2194,6 +2225,12 @@ function togglePrivateChatForm() {
   render();
 }
 
+function toggleChatMemberPanel(chatId) {
+  if (!chatId) return;
+  stateBag.chatMemberPanelChatId = stateBag.chatMemberPanelChatId === chatId ? "" : chatId;
+  renderChats();
+}
+
 async function requestFollow(targetIdOverride = "") {
   if (!currentActor()) return showNotice("请先创建或登录玩家账号。");
   const targetId = targetIdOverride || document.getElementById("follow-target")?.value;
@@ -2233,6 +2270,7 @@ async function requestChatMemberChange(action) {
     }
   });
   stateBag.data = result.state;
+  stateBag.chatMemberPanelChatId = "";
   showNotice(result.existing ? "已有相同申请在等待 GM 审批。" : "申请已发送，等待 GM 批准。");
   render();
 }

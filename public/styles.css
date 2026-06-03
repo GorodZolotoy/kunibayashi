@@ -622,7 +622,9 @@ textarea {
 .reply-composer {
   display: grid;
   gap: 8px;
-  margin-top: 12px;
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px dashed var(--line);
 }
 
 .reply-composer textarea {
@@ -1146,9 +1148,45 @@ textarea {
 .chat-member-panel {
   display: grid;
   gap: 8px;
-  padding: 10px 12px;
   border-top: 1px solid var(--line);
   background: rgba(0, 166, 103, 0.06);
+}
+
+.chat-member-panel.collapsed {
+  padding: 0;
+  background: rgba(0, 166, 103, 0.035);
+}
+
+.chat-member-panel.expanded {
+  padding: 10px 12px;
+}
+
+.chat-member-toggle {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  width: 100%;
+  min-height: 34px;
+  padding: 7px 12px;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  color: var(--ink);
+  font-weight: 850;
+  text-align: left;
+}
+
+.chat-member-toggle:hover {
+  background: rgba(0, 166, 103, 0.08);
+}
+
+.chat-member-panel.expanded .chat-member-toggle {
+  padding: 0;
+}
+
+.chat-member-panel.expanded .chat-member-toggle:hover {
+  background: transparent;
 }
 
 .member-change-grid {

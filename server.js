@@ -249,6 +249,9 @@ function normalizeState(state) {
     post.metrics = normalizeMetrics(post.metrics);
     post.replies ||= [];
     post.isAnonymous = post.isAnonymous === true;
+    for (const reply of post.replies) {
+      reply.isAnonymous = reply.isAnonymous === true;
+    }
     if (post.imageData && !post.attachment) {
       post.attachment = { type: "image", dataUrl: post.imageData, name: "image" };
       delete post.imageData;
@@ -719,8 +722,19 @@ function publicState(state) {
   ));
   const posts = (state.posts || []).map((post) => (
     !adminView && post.isAnonymous
-      ? { ...post, authorId: "" }
-      : post
+      ? {
+          ...post,
+          authorId: "",
+          replies: (post.replies || []).map((reply) => (
+            reply.isAnonymous ? { ...reply, authorId: "" } : reply
+          ))
+        }
+      : {
+          ...post,
+          replies: (post.replies || []).map((reply) => (
+            !adminView && reply.isAnonymous ? { ...reply, authorId: "" } : reply
+          ))
+        }
   ));
 
   return {
@@ -2016,6 +2030,7 @@ async function routeApi(req, res, url) {
         id: id("reply"),
         authorId: author.id,
         content,
+        isAnonymous: body.isAnonymous === true,
         gameTime: String(body.gameTime || state.settings.gameTime).trim(),
         createdAt: new Date().toISOString()
       });
@@ -2244,7 +2259,10 @@ function exportMarkdown(state) {
       lines.push("回复：");
       for (const reply of post.replies) {
         const replyAuthor = byId.get(reply.authorId);
-        lines.push(`- ${reply.gameTime} | ${replyAuthor?.name || "Unknown"}：${reply.content}`);
+        const replyAuthorLabel = reply.isAnonymous
+          ? `匿名${replyAuthor ? `（${replyAuthor.name}）` : ""}`
+          : (replyAuthor?.name || "Unknown");
+        lines.push(`- ${reply.gameTime} | ${replyAuthorLabel}：${reply.content}`);
       }
     }
     lines.push("");
