@@ -1756,6 +1756,7 @@ function decorateGmSections() {
         .filter((child) => child !== header)
         .forEach((child) => body.appendChild(child));
       body.hidden = collapsed;
+      body.style.display = collapsed ? "none" : "";
       section.appendChild(body);
       section.classList.toggle("collapsed", collapsed);
     });
@@ -2758,7 +2759,10 @@ function updateGmSectionCollapse(sectionId) {
   const body = section.querySelector(":scope > .gm-section-body");
   const toggle = section.querySelector(":scope > .gm-section-head .gm-section-toggle");
   section.classList.toggle("collapsed", collapsed);
-  if (body) body.hidden = collapsed;
+  if (body) {
+    body.hidden = collapsed;
+    body.style.display = collapsed ? "none" : "";
+  }
   if (toggle) {
     toggle.setAttribute("aria-expanded", collapsed ? "false" : "true");
     toggle.textContent = collapsed ? "展开" : "收起";

@@ -2997,6 +2997,10 @@ select:focus {
   margin-top: 12px;
 }
 
+.gm-section-body[hidden] {
+  display: none !important;
+}
+
 .roster-tools {
   display: grid;
   gap: 9px;
