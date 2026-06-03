@@ -2972,6 +2972,8 @@ select:focus {
 }
 
 .gm-section-toggle {
+  position: relative;
+  z-index: 2;
   flex: 0 0 auto;
   min-height: 30px;
   border: 1px solid rgba(15, 95, 63, 0.18);

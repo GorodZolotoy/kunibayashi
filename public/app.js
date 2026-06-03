@@ -2744,7 +2744,25 @@ function toggleGmSection(sectionId) {
   if (!sectionId) return;
   stateBag.gmCollapsedSections[sectionId] = !stateBag.gmCollapsedSections[sectionId];
   saveLocalJson("kokubayashi.gmCollapsedSections", stateBag.gmCollapsedSections);
-  renderGm();
+  updateGmSectionCollapse(sectionId);
+}
+
+function updateGmSectionCollapse(sectionId) {
+  const section = Array.from(els.viewRoot.querySelectorAll(".gm-section"))
+    .find((item) => item.dataset.sectionId === sectionId);
+  if (!section) {
+    renderGm();
+    return;
+  }
+  const collapsed = stateBag.gmCollapsedSections[sectionId] === true;
+  const body = section.querySelector(":scope > .gm-section-body");
+  const toggle = section.querySelector(":scope > .gm-section-head .gm-section-toggle");
+  section.classList.toggle("collapsed", collapsed);
+  if (body) body.hidden = collapsed;
+  if (toggle) {
+    toggle.setAttribute("aria-expanded", collapsed ? "false" : "true");
+    toggle.textContent = collapsed ? "展开" : "收起";
+  }
 }
 
 function setRosterTag(tag) {
