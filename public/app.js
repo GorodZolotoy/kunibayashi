@@ -921,6 +921,7 @@ function renderChats() {
   const previousScrollTop = previousBox?.scrollTop || 0;
   const latestMessage = messages[messages.length - 1];
   const latestMessageId = latestMessage?.id || "";
+  const characterMatches = chatSearchCharacterMatches(chats);
   if (active?.id && previousChatId === active.id && stateBag.renderedLatestMessageId && stateBag.renderedLatestMessageId !== latestMessageId && !wasNearBottom) {
     stateBag.chatNewPromptId = active.id;
   }
@@ -930,8 +931,10 @@ function renderChats() {
       <aside class="room-list">
         ${renderPlayerChatTools()}
         <input id="chat-search" class="room-search" value="${escapeAttr(stateBag.chatSearch)}" placeholder="搜索聊天 / 成员">
+        ${renderChatCharacterMatches(characterMatches)}
         ${roomChats.map((chat) => {
           const unread = unreadMessagesForChat(chat).length;
+          const matchLine = chatSearchMatchLine(chat);
           return `
             <div class="room-entry">
               <button class="pin-chat-button ${isChatPinned(chat.id) ? "active" : ""}" type="button" data-action="toggle-pin-chat" data-chat-id="${escapeAttr(chat.id)}">${isChatPinned(chat.id) ? "已置顶" : "置顶"}</button>
@@ -941,6 +944,7 @@ function renderChats() {
                   <span class="meta">${chat.memberIds.length} 人 · ${chat.type === "direct" ? "私聊" : "群聊"}</span>
                   ${unread ? `<span class="room-unread">${Math.min(unread, 99)}</span>` : ""}
                 </div>
+                ${matchLine ? `<div class="room-match-line">${matchLine}</div>` : ""}
               </button>
             </div>
           `;
@@ -3140,12 +3144,85 @@ function visibleBulletins() {
   return isGmAdminMode() ? [...bulletins] : bulletins.filter((bulletin) => bulletin.isPublic !== false);
 }
 
+function renderChatCharacterMatches(matches) {
+  const query = normalizeSearch(stateBag.chatSearch);
+  if (!query || !matches.length) return "";
+  return `
+    <div class="chat-character-results" aria-label="匹配角色">
+      <div class="mini-title">角色</div>
+      ${matches.map((character) => `
+        <button class="chat-character-result" type="button" data-action="view-profile" data-character-id="${escapeAttr(character.id)}">
+          ${renderAvatar(character)}
+          <span class="name-block">
+            <span class="name">${escapeHtml(character.name)}</span>
+            <span class="handle">${escapeHtml(character.handle || "")}</span>
+            ${renderCharacterTags(character)}
+          </span>
+        </button>
+      `).join("")}
+    </div>
+  `;
+}
+
+function chatSearchCharacterMatches(chats) {
+  const query = normalizeSearch(stateBag.chatSearch);
+  if (!query) return [];
+  return chatSearchCharacterCandidates(chats)
+    .filter((character) => chatCharacterSearchText(character).includes(query))
+    .slice(0, 12);
+}
+
+function chatSearchCharacterCandidates(chats) {
+  const ids = new Set();
+  for (const chat of chats) {
+    for (const memberId of chat.memberIds || []) ids.add(memberId);
+  }
+
+  if (isGmAdminMode()) {
+    for (const character of stateBag.data?.characters || []) {
+      if (character.active !== false) ids.add(character.id);
+    }
+  } else {
+    const actor = currentActor();
+    if (actor) ids.add(actor.id);
+    for (const contact of acceptedContacts()) ids.add(contact.id);
+  }
+
+  return [...ids]
+    .map((characterId) => getActor(characterId))
+    .filter((character) => character && character.active !== false);
+}
+
+function chatCharacterSearchText(character) {
+  return searchableText([
+    character?.name,
+    character?.handle,
+    isGmAdminMode() ? character?.username : "",
+    visibleCharacterTags(character).join(" ")
+  ]);
+}
+
+function chatSearchMatchLine(chat) {
+  const query = normalizeSearch(stateBag.chatSearch);
+  if (!query) return "";
+  const matches = (chat?.memberIds || [])
+    .map((memberId) => getActor(memberId))
+    .filter((character) => character && chatCharacterSearchText(character).includes(query));
+  if (!matches.length) return "";
+  const names = matches.slice(0, 3).map((character) => character.name).join("、");
+  const more = matches.length > 3 ? ` +${matches.length - 3}` : "";
+  return `匹配：${escapeHtml(names)}${escapeHtml(more)}`;
+}
+
 function filteredAndSortedChats(chats) {
   const query = normalizeSearch(stateBag.chatSearch);
   return [...chats]
     .filter((chat) => {
       if (!query) return true;
-      return searchableText([chat.name, chatMemberNames(chat).join(" ")]).includes(query);
+      return searchableText([
+        chat.name,
+        (chat.memberIds || []).map((memberId) => chatCharacterSearchText(getActor(memberId))).join(" ")
+      ]).includes(query);
     })
     .sort((a, b) => {
       const pinDelta = Number(isChatPinned(b.id)) - Number(isChatPinned(a.id));
@@ -3478,18 +3555,6 @@ function getActor(id) {
 
 function getChat(id) {
   return stateBag.data?.chats?.find((item) => item.id === id);
-}
-
-function memberNames(chat) {
-  if (!chat) return [];
-  return chat.memberIds.map((id) => getActor(id)?.name).filter(Boolean).slice(0, 8);
-}
-
-function chatMemberNames(chat) {
-  return (chat?.memberIds || [])
-    .map((memberId) => getActor(memberId))
-    .filter(Boolean)
-    .flatMap((member) => [member.name, member.handle, member.username, ...characterTags(member)]);
 }
 
 function renderMemberProfileLinks(chat) {

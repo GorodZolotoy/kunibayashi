@@ -2958,6 +2958,44 @@ select:focus {
   align-items: stretch;
 }
 
+.chat-character-results {
+  display: grid;
+  gap: 6px;
+  padding: 8px;
+  border: 1px solid rgba(15, 95, 63, 0.12);
+  border-radius: var(--radius);
+  background: rgba(255, 254, 248, 0.76);
+}
+
+.chat-character-result {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 8px;
+  align-items: center;
+  width: 100%;
+  border: 1px solid rgba(15, 95, 63, 0.1);
+  border-radius: var(--radius-sm);
+  background: rgba(255, 255, 255, 0.64);
+  color: var(--ink);
+  padding: 6px 7px;
+  text-align: left;
+}
+
+.chat-character-result .avatar {
+  width: 30px;
+  height: 30px;
+  font-size: 11px;
+}
+
+.chat-character-result .name,
+.chat-character-result .handle,
+.room-match-line {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .pin-chat-button {
   width: 54px;
   padding-inline: 6px;
@@ -2977,6 +3015,13 @@ select:focus {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.room-match-line {
+  margin-top: 4px;
+  color: var(--school-green);
+  font-size: 11px;
+  font-weight: 850;
 }
 
 .chat-layout.with-drawer {
