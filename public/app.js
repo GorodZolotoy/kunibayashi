@@ -18,6 +18,7 @@ const stateBag = {
   previewPickActorId: "",
   chatSearch: localStorage.getItem("kokubayashi.chatSearch") || "",
   chatSearchDraft: localStorage.getItem("kokubayashi.chatSearch") || "",
+  chatSearchCollapsed: readLocalBool("kokubayashi.chatSearchCollapsed", window.matchMedia?.("(max-width: 880px)").matches === true),
   feedFilter: normalizeFeedFilter(localStorage.getItem("kokubayashi.feedFilter") || "all"),
   feedSearch: localStorage.getItem("kokubayashi.feedSearch") || "",
   feedHashtag: normalizeHashtag(localStorage.getItem("kokubayashi.feedHashtag") || ""),
@@ -231,6 +232,7 @@ async function handleAction(target) {
   if (action === "delete-bulletin") return deleteBulletin(target.dataset.bulletinId);
   if (action === "select-chat") return selectChat(target.dataset.chatId);
   if (action === "toggle-pin-chat") return togglePinChat(target.dataset.chatId);
+  if (action === "toggle-chat-search") return toggleChatSearch();
   if (action === "jump-latest") return jumpToLatest();
   if (action === "toggle-member-drawer") return toggleMemberDrawer(target.dataset.chatId);
   if (action === "send-message") return sendMessage();
@@ -1007,6 +1009,8 @@ function renderChats() {
   const latestMessage = messages[messages.length - 1];
   const latestMessageId = latestMessage?.id || "";
   const characterMatches = chatSearchCharacterMatches(chats);
+  const searchCollapsed = stateBag.chatSearchCollapsed;
+  const searchLabel = stateBag.chatSearch ? `搜索：${stateBag.chatSearch}` : "搜索人物 / 聊天";
   if (active?.id && previousChatId === active.id && stateBag.renderedLatestMessageId && stateBag.renderedLatestMessageId !== latestMessageId && !wasNearBottom) {
     stateBag.chatNewPromptId = active.id;
   }
@@ -1015,11 +1019,19 @@ function renderChats() {
     <div class="chat-layout ${stateBag.memberDrawerChatId === active?.id ? "with-drawer" : ""}">
       <aside class="room-list">
         ${renderPlayerChatTools()}
-        <div class="chat-search-row">
-          <input id="chat-search" class="room-search" value="${escapeAttr(stateBag.chatSearchDraft)}" placeholder="搜索聊天 / 成员 / 角色">
-          <button class="secondary-button compact-action" type="button" data-action="apply-chat-search">搜索</button>
+        <div class="chat-search-panel ${searchCollapsed ? "collapsed" : "expanded"}">
+          <button class="chat-search-toggle" type="button" data-action="toggle-chat-search" aria-expanded="${searchCollapsed ? "false" : "true"}">
+            <span>${escapeHtml(searchLabel)}</span>
+            <span class="hint">${searchCollapsed ? "展开" : "收起"}</span>
+          </button>
+          ${searchCollapsed ? "" : `
+            <div class="chat-search-row">
+              <input id="chat-search" class="room-search" value="${escapeAttr(stateBag.chatSearchDraft)}" placeholder="搜索聊天 / 成员 / 角色">
+              <button class="secondary-button compact-action" type="button" data-action="apply-chat-search">搜索</button>
+            </div>
+            ${renderChatCharacterMatches(characterMatches)}
+          `}
         </div>
-        ${renderChatCharacterMatches(characterMatches)}
         ${roomChats.map((chat) => {
           const unread = unreadMessagesForChat(chat).length;
           const matchLine = chatSearchMatchLine(chat);
@@ -3138,6 +3150,12 @@ function togglePrivateChatForm() {
   render();
 }
 
+function toggleChatSearch() {
+  stateBag.chatSearchCollapsed = !stateBag.chatSearchCollapsed;
+  localStorage.setItem("kokubayashi.chatSearchCollapsed", String(stateBag.chatSearchCollapsed));
+  renderChats();
+}
+
 function toggleChatMemberPanel(chatId) {
   if (!chatId) return;
   stateBag.chatMemberPanelChatId = stateBag.chatMemberPanelChatId === chatId ? "" : chatId;
@@ -3921,6 +3939,12 @@ function readLocalJson(key, fallback) {
   } catch {
     return fallback;
   }
+}
+
+function readLocalBool(key, fallback = false) {
+  const raw = localStorage.getItem(key);
+  if (raw === null) return fallback;
+  return raw === "true";
 }
 
 function saveLocalJson(key, value) {

@@ -1290,6 +1290,44 @@ textarea {
   align-items: center;
 }
 
+.chat-search-panel {
+  display: grid;
+  gap: 7px;
+  padding: 7px;
+  border: 1px solid rgba(15, 95, 63, 0.12);
+  border-radius: var(--radius);
+  background: rgba(255, 254, 248, 0.62);
+}
+
+.chat-search-panel.collapsed {
+  padding: 0;
+  border-color: rgba(15, 95, 63, 0.08);
+  background: rgba(255, 254, 248, 0.38);
+}
+
+.chat-search-toggle {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  width: 100%;
+  min-height: 34px;
+  padding: 7px 9px;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: rgba(217, 231, 191, 0.54);
+  color: var(--ink);
+  font-weight: 900;
+  text-align: left;
+}
+
+.chat-search-toggle > span:first-child {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .chat-search-row {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
@@ -3480,6 +3518,19 @@ select:focus {
     max-height: 168px;
     padding: 8px;
     gap: 6px;
+  }
+
+  .chat-search-panel {
+    padding: 6px;
+  }
+
+  .chat-search-panel.collapsed {
+    padding: 0;
+  }
+
+  .chat-search-toggle {
+    min-height: 32px;
+    padding: 6px 8px;
   }
 
   .chat-layout > .thread {
