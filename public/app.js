@@ -18,6 +18,7 @@ const stateBag = {
   chatSearch: localStorage.getItem("kokubayashi.chatSearch") || "",
   feedFilter: localStorage.getItem("kokubayashi.feedFilter") || "all",
   feedSearch: localStorage.getItem("kokubayashi.feedSearch") || "",
+  feedHashtag: normalizeHashtag(localStorage.getItem("kokubayashi.feedHashtag") || ""),
   rosterSearch: localStorage.getItem("kokubayashi.rosterSearch") || "",
   rosterTag: localStorage.getItem("kokubayashi.rosterTag") || "",
   pinnedChatIds: readLocalJson("kokubayashi.pinnedChatIds", []),
@@ -55,6 +56,8 @@ const tabNames = {
   calendar: "校历",
   gm: "GM"
 };
+
+const HASHTAG_PATTERN = /(^|[^A-Za-z0-9_])#([\p{L}\p{N}_][\p{L}\p{N}_-]{0,48})/gu;
 
 async function boot() {
   bindGlobalEvents();
@@ -203,6 +206,8 @@ async function handleAction(target) {
   if (action === "open-gm-chat") return openGmChat(target.dataset.chatId);
   if (action === "open-gm-feed") return setTab("feed");
   if (action === "set-feed-filter") return setFeedFilter(target.dataset.filter);
+  if (action === "filter-hashtag") return setFeedHashtag(target.dataset.hashtag);
+  if (action === "clear-feed-hashtag") return setFeedHashtag("");
   if (action === "publish-bulletin") return publishBulletin();
   if (action === "delete-bulletin") return deleteBulletin(target.dataset.bulletinId);
   if (action === "select-chat") return selectChat(target.dataset.chatId);
@@ -522,6 +527,8 @@ function currentPreviewActor() {
 function isPreviewAllowedAction(action) {
   return [
     "set-feed-filter",
+    "filter-hashtag",
+    "clear-feed-hashtag",
     "select-chat",
     "toggle-pin-chat",
     "jump-latest",
@@ -599,6 +606,8 @@ function renderFeed() {
         <div class="segmented-controls">
           ${feedFilterButtons()}
         </div>
+        ${renderActiveHashtagFilter()}
+        ${renderFeedHashtagCloud()}
       </section>
       <section class="post-list" aria-label="SNS 时间线">
         ${posts.map(renderPost).join("") || `<div class="panel empty-panel">时间线还是空的。</div>`}
@@ -621,6 +630,43 @@ function feedFilterButtons() {
   `).join("");
 }
 
+function renderActiveHashtagFilter() {
+  const tag = stateBag.feedHashtag;
+  if (!tag) return "";
+  return `
+    <div class="active-hashtag-filter" aria-label="当前标签筛选">
+      <span>#${escapeHtml(tag)}</span>
+      <button class="ghost-button hashtag-clear-button" type="button" data-action="clear-feed-hashtag">清除</button>
+    </div>
+  `;
+}
+
+function renderFeedHashtagCloud() {
+  const tags = rankedFeedHashtags();
+  if (!tags.length) return "";
+  return `
+    <div class="hashtag-strip" aria-label="热门标签">
+      ${tags.map(([tag, count]) => `
+        <button class="hashtag-chip ${stateBag.feedHashtag === tag ? "active" : ""}" type="button" data-action="filter-hashtag" data-hashtag="${escapeAttr(tag)}">
+          #${escapeHtml(tag)} <span>${count}</span>
+        </button>
+      `).join("")}
+    </div>
+  `;
+}
+
+function rankedFeedHashtags() {
+  const counts = new Map();
+  for (const post of stateBag.data?.posts || []) {
+    for (const tag of postHashtags(post)) {
+      counts.set(tag, (counts.get(tag) || 0) + 1);
+    }
+  }
+  return [...counts.entries()]
+    .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0], "zh-CN"))
+    .slice(0, 12);
+}
+
 function filteredFeedPosts(posts) {
   const query = normalizeSearch(stateBag.feedSearch);
   const actorId = effectiveActorId();
@@ -631,9 +677,10 @@ function filteredFeedPosts(posts) {
     if (stateBag.feedFilter === "images" && post.attachment?.type !== "image") return false;
     if (stateBag.feedFilter === "accounts" && author?.type !== "account") return false;
     if (stateBag.feedFilter === "npc" && author?.type !== "npc") return false;
+    if (stateBag.feedHashtag && !postMatchesHashtag(post, stateBag.feedHashtag)) return false;
     if (!query) return true;
     const replyText = (post.replies || []).map((reply) => reply.content).join(" ");
-    return searchableText([post.content, author?.name, author?.handle, replyText]).includes(query);
+    return searchableText([post.content, author?.name, author?.handle, replyText, postHashtags(post).join(" ")]).includes(query);
   });
 }
 
@@ -720,7 +767,7 @@ function renderPost(post) {
           </div>
         </button>
       </header>
-      <div class="post-content">${formatText(post.content)}</div>
+      <div class="post-content">${formatText(post.content, { hashtags: true })}</div>
       ${post.attachment?.type === "image" ? renderImageAttachment(post.attachment, "post-image") : ""}
       <div class="post-actions">
         <button class="metric-button" type="button" data-action="like-post" data-post-id="${post.id}" ${isPreviewMode() ? "disabled" : ""}>喜欢 ${post.metrics.likes}</button>
@@ -2024,6 +2071,16 @@ function toggleReplyComposer(postId) {
 function setFeedFilter(filter) {
   stateBag.feedFilter = ["all", "mine", "anonymous", "images", "accounts", "npc"].includes(filter) ? filter : "all";
   localStorage.setItem("kokubayashi.feedFilter", stateBag.feedFilter);
+  renderFeed();
+}
+
+function setFeedHashtag(hashtag) {
+  stateBag.feedHashtag = normalizeHashtag(hashtag);
+  if (stateBag.feedHashtag) {
+    localStorage.setItem("kokubayashi.feedHashtag", stateBag.feedHashtag);
+  } else {
+    localStorage.removeItem("kokubayashi.feedHashtag");
+  }
   renderFeed();
 }
 
@@ -3334,7 +3391,7 @@ function showNotice(message) {
   }, 2600);
 }
 
-function formatText(value) {
+function formatText(value, options = {}) {
   let text = escapeHtml(value);
   const emojis = stateBag.data?.emojis || [];
   for (const emoji of emojis) {
@@ -3342,7 +3399,39 @@ function formatText(value) {
     const escapedToken = escapeRegExp(escapeHtml(token));
     text = text.replace(new RegExp(escapedToken, "g"), `<img class="inline-emoji" src="${escapeAttr(emoji.imageData)}" alt="${escapeAttr(token)}">`);
   }
+  if (options.hashtags) text = linkHashtags(text);
   return text.replace(/\n/g, "<br>");
+}
+
+function linkHashtags(text) {
+  HASHTAG_PATTERN.lastIndex = 0;
+  return text.replace(HASHTAG_PATTERN, (match, prefix, tag) => {
+    const normalized = normalizeHashtag(tag);
+    if (!normalized) return match;
+    return `${prefix}<button class="hashtag-link" type="button" data-action="filter-hashtag" data-hashtag="${escapeAttr(normalized)}">#${escapeHtml(tag)}</button>`;
+  });
+}
+
+function normalizeHashtag(value) {
+  const tag = String(value || "").trim().replace(/^#+/, "").toLowerCase();
+  const match = tag.match(/^[\p{L}\p{N}_][\p{L}\p{N}_-]{0,48}/u);
+  return match ? match[0] : "";
+}
+
+function postHashtags(post) {
+  const tags = [];
+  HASHTAG_PATTERN.lastIndex = 0;
+  for (const match of String(post?.content || "").matchAll(HASHTAG_PATTERN)) {
+    const tag = normalizeHashtag(match[2]);
+    if (tag && !tags.includes(tag)) tags.push(tag);
+  }
+  return tags;
+}
+
+function postMatchesHashtag(post, hashtag) {
+  const target = normalizeHashtag(hashtag);
+  if (!target) return true;
+  return postHashtags(post).includes(target);
 }
 
 function renderImageAttachment(attachment, className = "chat-image") {

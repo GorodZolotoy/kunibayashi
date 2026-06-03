@@ -578,6 +578,25 @@ textarea {
   font-size: 16px;
 }
 
+.hashtag-link {
+  display: inline;
+  min-height: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  color: var(--school-green);
+  padding: 0 1px;
+  font: inherit;
+  font-weight: 850;
+  line-height: inherit;
+  vertical-align: baseline;
+}
+
+.hashtag-link:hover,
+.hashtag-link:focus-visible {
+  text-decoration: underline;
+}
+
 .post-actions {
   color: var(--muted);
   font-size: 13px;
@@ -2843,6 +2862,63 @@ select:focus {
   border-color: var(--school-green);
   background: var(--school-green);
   color: var(--cream);
+}
+
+.hashtag-strip,
+.active-hashtag-filter {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  flex-wrap: wrap;
+}
+
+.active-hashtag-filter {
+  justify-content: space-between;
+  border: 1px dashed rgba(15, 95, 63, 0.22);
+  border-radius: var(--radius-sm);
+  background: rgba(217, 231, 191, 0.36);
+  padding: 6px 8px;
+}
+
+.active-hashtag-filter span {
+  color: var(--school-green);
+  font-size: 13px;
+  font-weight: 900;
+}
+
+.hashtag-chip {
+  min-height: 28px;
+  border: 1px solid rgba(15, 95, 63, 0.18);
+  border-radius: 999px;
+  background: rgba(255, 254, 248, 0.9);
+  color: #315141;
+  padding: 4px 9px;
+  font-size: 12px;
+  font-weight: 850;
+}
+
+.hashtag-chip span {
+  margin-left: 3px;
+  color: var(--muted);
+  font-weight: 800;
+}
+
+.hashtag-chip.active {
+  border-color: var(--school-green);
+  background: var(--school-green);
+  color: var(--cream);
+}
+
+.hashtag-chip.active span {
+  color: rgba(255, 248, 226, 0.82);
+}
+
+.hashtag-clear-button {
+  min-height: 24px;
+  padding: 2px 7px;
+  color: var(--school-green);
+  font-size: 12px;
+  font-weight: 850;
 }
 
 .room-entry {
