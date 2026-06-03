@@ -9,7 +9,20 @@ const stateBag = {
   profileId: "",
   privateChatOpen: false,
   chatMemberPanelChatId: "",
+  memberDrawerChatId: "",
   openReplyPostId: "",
+  actorSearch: "",
+  chatSearch: localStorage.getItem("kokubayashi.chatSearch") || "",
+  feedFilter: localStorage.getItem("kokubayashi.feedFilter") || "all",
+  feedSearch: localStorage.getItem("kokubayashi.feedSearch") || "",
+  rosterSearch: localStorage.getItem("kokubayashi.rosterSearch") || "",
+  rosterTag: localStorage.getItem("kokubayashi.rosterTag") || "",
+  pinnedChatIds: readLocalJson("kokubayashi.pinnedChatIds", []),
+  chatReadTimes: readLocalJson("kokubayashi.chatReadTimes", {}),
+  gmCollapsedSections: readLocalJson("kokubayashi.gmCollapsedSections", {}),
+  chatNewPromptId: "",
+  renderedChatId: "",
+  renderedLatestMessageId: "",
   lastGmCreatedAccount: null,
   lastGmImportedAccounts: [],
   gmPin: localStorage.getItem("kokubayashi.gmPin") || "",
@@ -21,6 +34,7 @@ const els = {
   viewRoot: document.getElementById("view-root"),
   viewTitle: document.getElementById("view-title"),
   clockLine: document.getElementById("clock-line"),
+  actorSearch: document.getElementById("actor-search"),
   actorSelect: document.getElementById("actor-select"),
   actorPreview: document.getElementById("actor-preview"),
   gmBadge: document.getElementById("gm-badge"),
@@ -104,10 +118,47 @@ function bindGlobalEvents() {
     }
   });
 
+  document.body.addEventListener("input", (event) => {
+    const target = event.target;
+    if (!target) return;
+    if (target.classList?.contains("member-filter-input")) {
+      filterMemberPicker(target);
+      return;
+    }
+    if (!target.id) return;
+    if (target.id === "actor-search") {
+      stateBag.actorSearch = target.value;
+      renderShell();
+      return;
+    }
+    if (target.id === "chat-search") {
+      stateBag.chatSearch = target.value;
+      localStorage.setItem("kokubayashi.chatSearch", stateBag.chatSearch);
+      renderChats();
+      return;
+    }
+    if (target.id === "feed-search") {
+      stateBag.feedSearch = target.value;
+      localStorage.setItem("kokubayashi.feedSearch", stateBag.feedSearch);
+      renderFeed();
+      return;
+    }
+    if (target.id === "roster-search") {
+      stateBag.rosterSearch = target.value;
+      localStorage.setItem("kokubayashi.rosterSearch", stateBag.rosterSearch);
+      renderGm();
+      return;
+    }
+  });
+
   els.actorSelect.addEventListener("change", () => {
     stateBag.actorId = els.actorSelect.value;
     localStorage.setItem("kokubayashi.actorId", stateBag.actorId);
     render();
+  });
+  els.actorSearch.addEventListener("input", () => {
+    stateBag.actorSearch = els.actorSearch.value;
+    renderShell();
   });
 }
 
@@ -124,9 +175,13 @@ async function handleAction(target) {
   if (action === "delete-chat") return deleteChat(target.dataset.chatId);
   if (action === "open-gm-chat") return openGmChat(target.dataset.chatId);
   if (action === "open-gm-feed") return setTab("feed");
+  if (action === "set-feed-filter") return setFeedFilter(target.dataset.filter);
   if (action === "publish-bulletin") return publishBulletin();
   if (action === "delete-bulletin") return deleteBulletin(target.dataset.bulletinId);
   if (action === "select-chat") return selectChat(target.dataset.chatId);
+  if (action === "toggle-pin-chat") return togglePinChat(target.dataset.chatId);
+  if (action === "jump-latest") return jumpToLatest();
+  if (action === "toggle-member-drawer") return toggleMemberDrawer(target.dataset.chatId);
   if (action === "send-message") return sendMessage();
   if (action === "select-calendar-month") return selectCalendarMonth(target.dataset.month);
   if (action === "select-calendar-day") return selectCalendarDay(target.dataset.dayId);
@@ -176,6 +231,8 @@ async function handleAction(target) {
   if (action === "open-direct-chat") return openDirectChat(target.dataset.characterId);
   if (action === "toggle-private-chat-form") return togglePrivateChatForm();
   if (action === "create-player-chat") return createPlayerPrivateChat();
+  if (action === "toggle-gm-section") return toggleGmSection(target.dataset.sectionId);
+  if (action === "set-roster-tag") return setRosterTag(target.dataset.tag || "");
 }
 
 async function refresh(forceRender) {
@@ -285,6 +342,9 @@ function renderShell() {
   els.gmBadge.classList.toggle("enabled", stateBag.gmUnlocked);
 
   document.querySelectorAll("[data-tab]").forEach((button) => {
+    const label = tabNames[button.dataset.tab] || button.dataset.tab;
+    const badge = navBadgeFor(button.dataset.tab);
+    button.innerHTML = `<span>${escapeHtml(label)}</span>${badge ? `<span class="nav-badge">${badge}</span>` : ""}`;
     button.classList.toggle("active", button.dataset.tab === stateBag.tab);
   });
 
@@ -296,18 +356,75 @@ function renderShell() {
   const hideIdentityPicker = !stateBag.gmUnlocked;
   const identityLabel = document.querySelector("label[for='actor-select']");
   if (identityLabel) identityLabel.hidden = hideIdentityPicker;
+  els.actorSearch.hidden = hideIdentityPicker;
   els.actorSelect.hidden = hideIdentityPicker;
   els.actorPreview.hidden = hideIdentityPicker;
+  if (els.actorSearch.value !== stateBag.actorSearch) els.actorSearch.value = stateBag.actorSearch;
+  const filteredActors = filterActorsForPicker(actors);
   els.actorSelect.innerHTML = actors.length
-    ? `${stateBag.gmUnlocked ? "" : `<option value="">未选择账号</option>`}${actors.map((actor) => `<option value="${actor.id}">${escapeHtml(actor.name)} ${escapeHtml(actor.handle)}</option>`).join("")}`
+    ? `${stateBag.gmUnlocked ? "" : `<option value="">未选择账号</option>`}${filteredActors.map((actor) => `<option value="${actor.id}">${escapeHtml(actor.name)} ${escapeHtml(actor.handle)}</option>`).join("")}`
     : `<option value="">创建玩家账号后使用</option>`;
   els.actorSelect.value = stateBag.actorId;
   els.actorPreview.innerHTML = renderActorPreview(getActor(stateBag.actorId));
   els.accountTools.innerHTML = renderAccountTools();
 }
 
+function filterActorsForPicker(actors) {
+  const query = normalizeSearch(stateBag.actorSearch);
+  const filtered = query
+    ? actors.filter((actor) => searchableText([actor.name, actor.handle, actor.username, characterTags(actor).join(" ")]).includes(query))
+    : actors;
+  const selected = actors.find((actor) => actor.id === stateBag.actorId);
+  if (selected && !filtered.some((actor) => actor.id === selected.id)) return [selected, ...filtered];
+  return filtered;
+}
+
+function filterMemberPicker(input) {
+  const picker = input.parentElement?.querySelector(".member-picker");
+  if (!picker) return;
+  const query = normalizeSearch(input.value);
+  Array.from(picker.querySelectorAll(".member-option")).forEach((option) => {
+    option.hidden = query ? !normalizeSearch(option.textContent).includes(query) : false;
+  });
+}
+
+function navBadgeFor(tab) {
+  if (!stateBag.data) return "";
+  if (tab === "chats") {
+    const count = unreadChatCount();
+    return count ? String(Math.min(count, 99)) : "";
+  }
+  if (tab === "gm" && stateBag.gmUnlocked) {
+    const pending = pendingGmCount();
+    return pending ? String(Math.min(pending, 99)) : "";
+  }
+  return "";
+}
+
+function pendingGmCount() {
+  const follows = (stateBag.data?.relationships || []).filter((item) => item.status === "pending").length;
+  const memberRequests = (stateBag.data?.chatMemberRequests || []).filter((item) => item.status === "pending").length;
+  const events = (stateBag.data?.calendarDays || []).reduce((sum, day) => sum + (day.events || []).filter((event) => !event.triggeredAt).length, 0);
+  return follows + memberRequests + events;
+}
+
+function unreadChatCount() {
+  const chats = visibleChats();
+  return chats.reduce((sum, chat) => sum + unreadMessagesForChat(chat).length, 0);
+}
+
+function unreadMessagesForChat(chat) {
+  if (!chat) return [];
+  const readTime = stateBag.chatReadTimes[chat.id] || "";
+  return (stateBag.data?.messages || []).filter((message) => (
+    message.chatId === chat.id &&
+    (!readTime || String(message.createdAt).localeCompare(String(readTime)) > 0) &&
+    (!stateBag.actorId || message.authorId !== stateBag.actorId)
+  ));
+}
+
 function renderFeed() {
-  const posts = [...stateBag.data.posts].sort((a, b) => String(b.createdAt).localeCompare(String(a.createdAt)));
+  const posts = filteredFeedPosts([...stateBag.data.posts].sort((a, b) => String(b.createdAt).localeCompare(String(a.createdAt))));
   const actor = currentActor();
   els.viewRoot.innerHTML = `
     <div class="feed-layout">
@@ -329,11 +446,46 @@ function renderFeed() {
           <button class="primary-button" type="button" data-action="publish-post" ${actor ? "" : "disabled"}>发布</button>
         </div>
       </section>
+      <section class="filter-strip" aria-label="时间线筛选">
+        <input id="feed-search" value="${escapeAttr(stateBag.feedSearch)}" placeholder="搜索帖子 / 作者 / @handle">
+        <div class="segmented-controls">
+          ${feedFilterButtons()}
+        </div>
+      </section>
       <section class="post-list" aria-label="SNS 时间线">
         ${posts.map(renderPost).join("") || `<div class="panel empty-panel">时间线还是空的。</div>`}
       </section>
     </div>
   `;
+}
+
+function feedFilterButtons() {
+  const filters = [
+    ["all", "全部"],
+    ["mine", "我的"],
+    ["anonymous", "匿名"],
+    ["images", "有图"],
+    ["accounts", "账号"],
+    ["npc", "NPC"]
+  ];
+  return filters.map(([value, label]) => `
+    <button class="segment-button ${stateBag.feedFilter === value ? "active" : ""}" type="button" data-action="set-feed-filter" data-filter="${value}">${label}</button>
+  `).join("");
+}
+
+function filteredFeedPosts(posts) {
+  const query = normalizeSearch(stateBag.feedSearch);
+  return posts.filter((post) => {
+    const author = getActor(post.authorId);
+    if (stateBag.feedFilter === "mine" && post.authorId !== stateBag.actorId) return false;
+    if (stateBag.feedFilter === "anonymous" && post.isAnonymous !== true) return false;
+    if (stateBag.feedFilter === "images" && post.attachment?.type !== "image") return false;
+    if (stateBag.feedFilter === "accounts" && author?.type !== "account") return false;
+    if (stateBag.feedFilter === "npc" && author?.type !== "npc") return false;
+    if (!query) return true;
+    const replyText = (post.replies || []).map((reply) => reply.content).join(" ");
+    return searchableText([post.content, author?.name, author?.handle, replyText]).includes(query);
+  });
 }
 
 function renderBulletins() {
@@ -496,6 +648,7 @@ function renderPlayerChatTools() {
     ${stateBag.privateChatOpen ? `
       <div class="private-chat-panel">
         <input id="private-chat-name" maxlength="80" placeholder="群聊名称">
+        <input class="member-filter-input" placeholder="搜索可邀请角色 / @handle / 标签">
         <div class="member-picker compact-picker">
           ${memberOptions || `<div class="hint padded">暂无已批准联系人。</div>`}
         </div>
@@ -509,17 +662,37 @@ function renderChats() {
   const chats = visibleChats();
   const active = chats.find((chat) => chat.id === stateBag.activeChatId);
   const messages = active ? stateBag.data.messages.filter((message) => message.chatId === active.id).sort((a, b) => String(a.createdAt).localeCompare(String(b.createdAt))) : [];
+  const roomChats = filteredAndSortedChats(chats);
+  const previousBox = document.getElementById("messages");
+  const previousChatId = stateBag.renderedChatId;
+  const wasNearBottom = isNearBottom(previousBox);
+  const previousScrollTop = previousBox?.scrollTop || 0;
+  const latestMessage = messages[messages.length - 1];
+  const latestMessageId = latestMessage?.id || "";
+  if (active?.id && previousChatId === active.id && stateBag.renderedLatestMessageId && stateBag.renderedLatestMessageId !== latestMessageId && !wasNearBottom) {
+    stateBag.chatNewPromptId = active.id;
+  }
 
   els.viewRoot.innerHTML = `
-    <div class="chat-layout">
+    <div class="chat-layout ${stateBag.memberDrawerChatId === active?.id ? "with-drawer" : ""}">
       <aside class="room-list">
         ${renderPlayerChatTools()}
-        ${chats.map((chat) => `
-          <button class="room-button ${chat.id === stateBag.activeChatId ? "active" : ""}" type="button" data-action="select-chat" data-chat-id="${chat.id}">
-            <div class="name">${escapeHtml(chat.name)}</div>
-            <div class="meta">${chat.memberIds.length} 人 · ${chat.type === "direct" ? "私聊" : "群聊"}</div>
-          </button>
-        `).join("") || `<div class="hint">没有可见聊天。</div>`}
+        <input id="chat-search" class="room-search" value="${escapeAttr(stateBag.chatSearch)}" placeholder="搜索聊天 / 成员">
+        ${roomChats.map((chat) => {
+          const unread = unreadMessagesForChat(chat).length;
+          return `
+            <div class="room-entry">
+              <button class="pin-chat-button ${isChatPinned(chat.id) ? "active" : ""}" type="button" data-action="toggle-pin-chat" data-chat-id="${escapeAttr(chat.id)}">${isChatPinned(chat.id) ? "已置顶" : "置顶"}</button>
+              <button class="room-button ${chat.id === stateBag.activeChatId ? "active" : ""}" type="button" data-action="select-chat" data-chat-id="${chat.id}">
+                <div class="name">${escapeHtml(chat.name)}</div>
+                <div class="room-meta-row">
+                  <span class="meta">${chat.memberIds.length} 人 · ${chat.type === "direct" ? "私聊" : "群聊"}</span>
+                  ${unread ? `<span class="room-unread">${Math.min(unread, 99)}</span>` : ""}
+                </div>
+              </button>
+            </div>
+          `;
+        }).join("") || `<div class="hint">没有符合条件的聊天。</div>`}
       </aside>
       <section class="thread">
         <header class="thread-header">
@@ -527,12 +700,15 @@ function renderChats() {
             <div class="section-title">${escapeHtml(active?.name || "聊天")}</div>
             <div class="meta member-links">${renderMemberProfileLinks(active)}</div>
           </div>
-          ${canDeleteChat(active) ? `<button class="danger-button compact-action" type="button" data-action="delete-chat" data-chat-id="${escapeAttr(active.id)}">删除聊天</button>` : ""}
+          <div class="row-actions">
+            ${active ? `<button class="secondary-button compact-action" type="button" data-action="toggle-member-drawer" data-chat-id="${escapeAttr(active.id)}">${stateBag.memberDrawerChatId === active.id ? "收起成员" : "成员"}</button>` : ""}
+            ${canDeleteChat(active) ? `<button class="danger-button compact-action" type="button" data-action="delete-chat" data-chat-id="${escapeAttr(active.id)}">删除聊天</button>` : ""}
+          </div>
         </header>
-        ${renderChatMemberRequestPanel(active)}
         <div class="messages" id="messages">
           ${messages.map(renderMessage).join("") || `<div class="hint">这里还没有消息。</div>`}
         </div>
+        ${active && stateBag.chatNewPromptId === active.id ? `<button class="jump-latest-button" type="button" data-action="jump-latest">有新消息，跳到最新</button>` : ""}
         <div class="message-form">
           <textarea id="message-content" maxlength="500" placeholder="发送消息"></textarea>
           <div class="message-tools">
@@ -549,11 +725,33 @@ function renderChats() {
           <button class="primary-button" type="button" data-action="send-message">发送</button>
         </div>
       </section>
+      ${renderChatMemberDrawer(active)}
     </div>
   `;
 
   const messageBox = document.getElementById("messages");
-  if (messageBox) messageBox.scrollTop = messageBox.scrollHeight;
+  if (messageBox && active) {
+    if (stateBag.chatNewPromptId === active.id && previousChatId === active.id) {
+      messageBox.scrollTop = previousScrollTop;
+    } else {
+      messageBox.scrollTop = messageBox.scrollHeight;
+      markChatRead(active.id, latestMessage?.createdAt);
+      renderShell();
+    }
+    messageBox.addEventListener("scroll", () => {
+      if (isNearBottom(messageBox)) {
+        markChatRead(active.id, latestMessage?.createdAt);
+        if (stateBag.chatNewPromptId === active.id) {
+          stateBag.chatNewPromptId = "";
+          renderChats();
+        } else {
+          renderShell();
+        }
+      }
+    });
+  }
+  stateBag.renderedChatId = active?.id || "";
+  stateBag.renderedLatestMessageId = latestMessageId;
 }
 
 function renderChatMemberRequestPanel(chat) {
@@ -593,6 +791,35 @@ function renderChatMemberRequestPanel(chat) {
         <div class="hint">GM 批准后成员变化才会生效。</div>
       ` : ""}
     </div>
+  `;
+}
+
+function renderChatMemberDrawer(chat) {
+  if (!chat || stateBag.memberDrawerChatId !== chat.id) return "";
+  const members = (chat.memberIds || []).map((memberId) => getActor(memberId)).filter(Boolean);
+  return `
+    <aside class="member-drawer">
+      <div class="drawer-header">
+        <div>
+          <div class="section-title">群成员</div>
+          <div class="meta">${escapeHtml(chat.name)} · ${members.length} 人</div>
+        </div>
+        <button class="ghost-button compact-action" type="button" data-action="toggle-member-drawer" data-chat-id="${escapeAttr(chat.id)}">收起</button>
+      </div>
+      <div class="member-drawer-list">
+        ${members.map((member) => `
+          <button class="member-drawer-row" type="button" data-action="view-profile" data-character-id="${escapeAttr(member.id)}">
+            ${renderAvatar(member)}
+            <span class="name-block">
+              <span class="name">${escapeHtml(member.name)}</span>
+              <span class="handle">${escapeHtml(member.handle || "")}</span>
+              ${renderCharacterTags(member)}
+            </span>
+          </button>
+        `).join("") || `<div class="hint padded">暂无成员。</div>`}
+      </div>
+      ${renderChatMemberRequestPanel(chat)}
+    </aside>
   `;
 }
 
@@ -1313,6 +1540,78 @@ function renderGmPlayerAccountManager(chars) {
   `;
 }
 
+function renderGmSection(idValue, title, content, options = {}) {
+  const collapsed = stateBag.gmCollapsedSections[idValue] === true;
+  return `
+    <section class="gm-section ${options.wide ? "gm-wide" : ""} ${collapsed ? "collapsed" : "expanded"}">
+      <button class="gm-section-toggle" type="button" data-action="toggle-gm-section" data-section-id="${escapeAttr(idValue)}">
+        <span>${escapeHtml(title)}</span>
+        <span class="hint">${collapsed ? "展开" : "收起"}</span>
+      </button>
+      ${collapsed ? "" : `<div class="gm-section-body">${content}</div>`}
+    </section>
+  `;
+}
+
+function decorateGmSections() {
+  const grid = els.viewRoot.querySelector(".gm-grid");
+  if (!grid) return;
+
+  Array.from(grid.children)
+    .filter((section) => section.tagName === "SECTION")
+    .forEach((section, index) => {
+      const titleNode = section.querySelector(".section-title");
+      const title = titleNode?.textContent?.trim() || `GM ${index + 1}`;
+      const sectionId = section.dataset.sectionId || gmSectionId(title, index);
+      const collapsed = stateBag.gmCollapsedSections[sectionId] === true;
+      const firstChild = section.firstElementChild;
+      let header = firstChild;
+
+      section.dataset.sectionId = sectionId;
+      section.classList.add("gm-section");
+
+      if (header?.classList.contains("section-title")) {
+        const wrapper = document.createElement("div");
+        wrapper.className = "gm-section-head";
+        section.replaceChild(wrapper, header);
+        wrapper.appendChild(header);
+        header = wrapper;
+      } else if (!header || !header.querySelector?.(".section-title")) {
+        header = document.createElement("div");
+        header.className = "gm-section-head";
+        header.innerHTML = `<div class="section-title">${escapeHtml(title)}</div>`;
+        section.prepend(header);
+      } else {
+        header.classList.add("gm-section-head");
+      }
+
+      const toggle = document.createElement("button");
+      toggle.className = "gm-section-toggle";
+      toggle.type = "button";
+      toggle.dataset.action = "toggle-gm-section";
+      toggle.dataset.sectionId = sectionId;
+      toggle.setAttribute("aria-expanded", collapsed ? "false" : "true");
+      toggle.textContent = collapsed ? "展开" : "收起";
+      header.appendChild(toggle);
+
+      const body = document.createElement("div");
+      body.className = "gm-section-body";
+      Array.from(section.children)
+        .filter((child) => child !== header)
+        .forEach((child) => body.appendChild(child));
+      body.hidden = collapsed;
+      section.appendChild(body);
+      section.classList.toggle("collapsed", collapsed);
+    });
+}
+
+function gmSectionId(title, index) {
+  const base = normalizeSearch(title)
+    .replace(/[^\w\u4e00-\u9fff]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+  return `gm-${base || index + 1}`;
+}
+
 function renderGm() {
   if (!stateBag.gmUnlocked) {
     els.viewRoot.innerHTML = `
@@ -1328,6 +1627,13 @@ function renderGm() {
   }
 
   const chars = stateBag.data.characters.filter((item) => item.active !== false);
+  const rosterTags = [...new Set(chars.flatMap((character) => characterTags(character)))]
+    .sort((a, b) => a.localeCompare(b, "zh-CN"));
+  if (stateBag.rosterTag && !rosterTags.includes(stateBag.rosterTag)) {
+    stateBag.rosterTag = "";
+    localStorage.removeItem("kokubayashi.rosterTag");
+  }
+  const rosterChars = filteredRosterCharacters(chars);
   const pendingFollows = (stateBag.data.relationships || []).filter((item) => item.status === "pending");
   const days = calendarDays();
   const gmDay = getCalendarDay(stateBag.gmScheduleDayId) || currentCalendarDay() || days[0];
@@ -1418,6 +1724,7 @@ function renderGm() {
         <div class="section-title">新建群聊</div>
         <div class="form-grid">
           <label>群名 <input id="new-chat-name"></label>
+          <input class="member-filter-input" placeholder="搜索角色 / @handle / 标签">
           <div class="member-picker">
             ${chars.map((character) => `
               <label class="member-option">
@@ -1442,12 +1749,21 @@ function renderGm() {
         <div class="roster-heading">
           <div>
             <div class="section-title">角色名册</div>
-            <div class="hint">${chars.length} 个 active 角色</div>
+            <div class="hint">${rosterChars.length} / ${chars.length} 个 active 角色</div>
           </div>
           <button class="danger-button compact-action" type="button" data-action="delete-all-characters" ${chars.length ? "" : "disabled"}>删除全部角色</button>
         </div>
+        <div class="roster-tools">
+          <input id="roster-search" value="${escapeAttr(stateBag.rosterSearch)}" placeholder="搜索角色 / @handle / 标签 / 登录名">
+          <div class="tag-filter-row">
+            <button class="segment-button ${stateBag.rosterTag ? "" : "active"}" type="button" data-action="set-roster-tag" data-tag="">全部标签</button>
+            ${rosterTags.map((tag) => `
+              <button class="segment-button tag-filter-button ${stateBag.rosterTag === tag ? "active" : ""}" type="button" data-action="set-roster-tag" data-tag="${escapeAttr(tag)}">${escapeHtml(tag)}</button>
+            `).join("") || `<span class="hint">还没有标签。</span>`}
+          </div>
+        </div>
         <div class="roster">
-          ${chars.map((character) => `
+          ${rosterChars.map((character) => `
             <div class="roster-row">
               <div class="roster-identity">
                 ${renderAvatar(character)}
@@ -1481,11 +1797,12 @@ function renderGm() {
                 </div>
               </div>
             </div>
-          `).join("")}
+          `).join("") || `<div class="hint padded">没有符合筛选条件的角色。</div>`}
         </div>
       </section>
     </div>
   `;
+  decorateGmSections();
 }
 
 async function publishPost() {
@@ -1520,6 +1837,12 @@ function toggleReplyComposer(postId) {
   if (!postId) return;
   stateBag.openReplyPostId = stateBag.openReplyPostId === postId ? "" : postId;
   render();
+}
+
+function setFeedFilter(filter) {
+  stateBag.feedFilter = ["all", "mine", "anonymous", "images", "accounts", "npc"].includes(filter) ? filter : "all";
+  localStorage.setItem("kokubayashi.feedFilter", stateBag.feedFilter);
+  renderFeed();
 }
 
 async function replyPost(postId) {
@@ -2209,6 +2532,19 @@ async function createChat() {
   await refresh(true);
 }
 
+function toggleGmSection(sectionId) {
+  if (!sectionId) return;
+  stateBag.gmCollapsedSections[sectionId] = !stateBag.gmCollapsedSections[sectionId];
+  saveLocalJson("kokubayashi.gmCollapsedSections", stateBag.gmCollapsedSections);
+  renderGm();
+}
+
+function setRosterTag(tag) {
+  stateBag.rosterTag = tag || "";
+  localStorage.setItem("kokubayashi.rosterTag", stateBag.rosterTag);
+  renderGm();
+}
+
 function viewProfile(characterId) {
   if (!characterId || !getActor(characterId)) return;
   stateBag.profileId = characterId;
@@ -2228,6 +2564,32 @@ function togglePrivateChatForm() {
 function toggleChatMemberPanel(chatId) {
   if (!chatId) return;
   stateBag.chatMemberPanelChatId = stateBag.chatMemberPanelChatId === chatId ? "" : chatId;
+  renderChats();
+}
+
+function toggleMemberDrawer(chatId) {
+  if (!chatId) return;
+  stateBag.memberDrawerChatId = stateBag.memberDrawerChatId === chatId ? "" : chatId;
+  renderChats();
+}
+
+function togglePinChat(chatId) {
+  if (!chatId) return;
+  const ids = new Set(stateBag.pinnedChatIds);
+  if (ids.has(chatId)) ids.delete(chatId);
+  else ids.add(chatId);
+  stateBag.pinnedChatIds = Array.from(ids);
+  saveLocalJson("kokubayashi.pinnedChatIds", stateBag.pinnedChatIds);
+  renderChats();
+}
+
+function jumpToLatest() {
+  const box = document.getElementById("messages");
+  const chat = getChat(stateBag.activeChatId);
+  const latest = latestMessageForChat(chat);
+  if (box) box.scrollTop = box.scrollHeight;
+  if (chat) markChatRead(chat.id, latest?.createdAt);
+  stateBag.chatNewPromptId = "";
   renderChats();
 }
 
@@ -2350,6 +2712,61 @@ function visibleChats() {
   if (stateBag.gmUnlocked) return chats;
   if (!stateBag.actorId) return chats.filter((chat) => chat.isPublic);
   return chats.filter((chat) => chat.isPublic || chat.memberIds.includes(stateBag.actorId));
+}
+
+function filteredAndSortedChats(chats) {
+  const query = normalizeSearch(stateBag.chatSearch);
+  return [...chats]
+    .filter((chat) => {
+      if (!query) return true;
+      return searchableText([chat.name, chatMemberNames(chat).join(" ")]).includes(query);
+    })
+    .sort((a, b) => {
+      const pinDelta = Number(isChatPinned(b.id)) - Number(isChatPinned(a.id));
+      if (pinDelta) return pinDelta;
+      const aLatest = latestMessageForChat(a)?.createdAt || a.createdAt || "";
+      const bLatest = latestMessageForChat(b)?.createdAt || b.createdAt || "";
+      return String(bLatest).localeCompare(String(aLatest));
+    });
+}
+
+function filteredRosterCharacters(chars) {
+  const query = normalizeSearch(stateBag.rosterSearch);
+  const tag = stateBag.rosterTag;
+  return chars.filter((character) => {
+    if (tag && !characterTags(character).includes(tag)) return false;
+    if (!query) return true;
+    return searchableText([
+      character.name,
+      character.handle,
+      character.username,
+      character.type,
+      characterTags(character).join(" ")
+    ]).includes(query);
+  });
+}
+
+function isChatPinned(chatId) {
+  return stateBag.pinnedChatIds.includes(chatId);
+}
+
+function latestMessageForChat(chat) {
+  if (!chat) return null;
+  return [...(stateBag.data?.messages || [])]
+    .filter((message) => message.chatId === chat.id)
+    .sort((a, b) => String(b.createdAt).localeCompare(String(a.createdAt)))[0] || null;
+}
+
+function markChatRead(chatId, createdAt) {
+  if (!chatId || !createdAt) return;
+  if (String(stateBag.chatReadTimes[chatId] || "").localeCompare(String(createdAt)) >= 0) return;
+  stateBag.chatReadTimes[chatId] = createdAt;
+  saveLocalJson("kokubayashi.chatReadTimes", stateBag.chatReadTimes);
+}
+
+function isNearBottom(element) {
+  if (!element) return true;
+  return element.scrollHeight - element.scrollTop - element.clientHeight < 80;
 }
 
 function canDeleteChat(chat) {
@@ -2607,6 +3024,13 @@ function memberNames(chat) {
   return chat.memberIds.map((id) => getActor(id)?.name).filter(Boolean).slice(0, 8);
 }
 
+function chatMemberNames(chat) {
+  return (chat?.memberIds || [])
+    .map((memberId) => getActor(memberId))
+    .filter(Boolean)
+    .flatMap((member) => [member.name, member.handle, member.username, ...characterTags(member)]);
+}
+
 function renderMemberProfileLinks(chat) {
   if (!chat) return "";
   const members = chat.memberIds.map((id) => getActor(id)).filter(Boolean).slice(0, 10);
@@ -2727,19 +3151,36 @@ function formatDateTime(value) {
 }
 
 function readAccountTokens() {
-  try {
-    return JSON.parse(localStorage.getItem("kokubayashi.accountTokens") || "{}");
-  } catch {
-    return {};
-  }
+  return readLocalJson("kokubayashi.accountTokens", {});
 }
 
 function saveAccountTokens() {
-  localStorage.setItem("kokubayashi.accountTokens", JSON.stringify(stateBag.accountTokens));
+  saveLocalJson("kokubayashi.accountTokens", stateBag.accountTokens);
 }
 
 function currentAccountToken() {
   return stateBag.accountTokens[stateBag.actorId] || "";
+}
+
+function readLocalJson(key, fallback) {
+  try {
+    const raw = localStorage.getItem(key);
+    return raw ? JSON.parse(raw) : fallback;
+  } catch {
+    return fallback;
+  }
+}
+
+function saveLocalJson(key, value) {
+  localStorage.setItem(key, JSON.stringify(value));
+}
+
+function normalizeSearch(value) {
+  return String(value || "").trim().toLowerCase();
+}
+
+function searchableText(values) {
+  return values.filter(Boolean).join(" ").toLowerCase();
 }
 
 function fileToImageDataUrl(file, maxEdge, quality, maxLength = Infinity) {
