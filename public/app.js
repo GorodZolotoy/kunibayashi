@@ -30,7 +30,8 @@ const stateBag = {
   lastGmImportedAccounts: [],
   gmPin: localStorage.getItem("kokubayashi.gmPin") || "",
   accountTokens: readAccountTokens(),
-  gmUnlocked: localStorage.getItem("kokubayashi.gmUnlocked") === "true"
+  gmUnlocked: localStorage.getItem("kokubayashi.gmUnlocked") === "true",
+  refreshInFlight: false
 };
 
 const els = {
@@ -262,13 +263,25 @@ async function handleAction(target) {
 }
 
 async function refresh(forceRender) {
+  if (stateBag.refreshInFlight && !forceRender) return;
+  stateBag.refreshInFlight = true;
   const previousUpdatedAt = stateBag.data?.updatedAt;
-  const data = await api("/api/state");
-  stateBag.data = data;
-  ensureActor();
-  ensureChat();
-  const changed = previousUpdatedAt !== data.updatedAt;
-  if (forceRender || (changed && canAutoRender())) render();
+  try {
+    const path = !forceRender && previousUpdatedAt
+      ? `/api/state?since=${encodeURIComponent(previousUpdatedAt)}`
+      : "/api/state";
+    const payload = await api(path);
+    if (payload?.changed === false) return;
+    const data = payload?.changed === true && payload.state ? payload.state : payload;
+    if (!data?.updatedAt) return;
+    stateBag.data = data;
+    ensureActor();
+    ensureChat();
+    const changed = previousUpdatedAt !== data.updatedAt;
+    if (forceRender || (changed && canAutoRender())) render();
+  } finally {
+    stateBag.refreshInFlight = false;
+  }
 }
 
 function ensureActor() {

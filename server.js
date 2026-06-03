@@ -2,6 +2,7 @@ const http = require("http");
 const fs = require("fs");
 const path = require("path");
 const crypto = require("crypto");
+const { AsyncLocalStorage } = require("async_hooks");
 
 const ROOT = __dirname;
 const PUBLIC_DIR = path.join(ROOT, "public");
@@ -17,6 +18,9 @@ const MAX_POST_IMAGE_DATA_URL_LENGTH = 9000000;
 const MAX_CHAT_IMAGE_DATA_URL_LENGTH = 9000000;
 const MAX_ACCOUNT_IMPORT_COUNT = 120;
 const MAX_CHARACTER_IMPORT_COUNT = 200;
+
+let cachedState = null;
+const requestContext = new AsyncLocalStorage();
 
 const MIME = {
   ".html": "text/html; charset=utf-8",
@@ -76,12 +80,16 @@ function ensureState() {
 
 function readState() {
   ensureState();
+  if (cachedState) return cachedState;
   const state = JSON.parse(fs.readFileSync(STATE_FILE, "utf8"));
-  return normalizeState(state);
+  cachedState = normalizeState(state);
+  return cachedState;
 }
 
 function writeState(state) {
   fs.mkdirSync(DATA_DIR, { recursive: true });
+  cachedState = normalizeState(state);
+  state = cachedState;
   state.updatedAt = new Date().toISOString();
   const tempFile = `${STATE_FILE}.tmp`;
   fs.writeFileSync(tempFile, JSON.stringify(state, null, 2), "utf8");
@@ -183,6 +191,7 @@ function createInitialState() {
 
 function normalizeState(state) {
   state.version = Math.max(Number(state.version || 1), 6);
+  state.updatedAt ||= new Date().toISOString();
   state.settings ||= {};
   state.settings.gameTime ||= "开学首日 18:12";
   state.settings.schoolDay ||= "周一";
@@ -708,7 +717,7 @@ function sendJson(res, status, payload) {
 }
 
 function publicState(state) {
-  const adminView = Boolean(state.__adminView);
+  const adminView = requestContext.getStore()?.adminView ?? Boolean(state.__adminView);
   const calendarDays = (state.calendarDays || []).map((day) => ({
     ...day,
     events: adminView
@@ -1160,9 +1169,17 @@ function restoreLastUndo(state) {
 
 async function routeApi(req, res, url) {
   const state = readState();
-  Object.defineProperty(state, "__adminView", { value: isAdmin(req), enumerable: false });
 
   if (req.method === "GET" && url.pathname === "/api/state") {
+    const since = String(url.searchParams.get("since") || "");
+    if (since && since === String(state.updatedAt || "")) {
+      sendJson(res, 200, { changed: false, updatedAt: state.updatedAt });
+      return;
+    }
+    if (since) {
+      sendJson(res, 200, { changed: true, updatedAt: state.updatedAt, state: publicState(state) });
+      return;
+    }
     sendJson(res, 200, publicState(state));
     return;
   }
@@ -2346,9 +2363,11 @@ http.createServer((req, res) => {
     serveStatic(req, res, url);
     return;
   }
-  routeApi(req, res, url).catch((error) => {
-    console.error(error);
-    sendJson(res, 500, { error: error.message || "Internal server error." });
+  requestContext.run({ adminView: isAdmin(req) }, () => {
+    routeApi(req, res, url).catch((error) => {
+      console.error(error);
+      sendJson(res, 500, { error: error.message || "Internal server error." });
+    });
   });
 }).listen(PORT, HOST, () => {
   console.log(`TRPG SNS system running at http://localhost:${PORT}`);
