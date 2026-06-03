@@ -182,7 +182,7 @@ function createInitialState() {
 }
 
 function normalizeState(state) {
-  state.version = Math.max(Number(state.version || 1), 5);
+  state.version = Math.max(Number(state.version || 1), 6);
   state.settings ||= {};
   state.settings.gameTime ||= "开学首日 18:12";
   state.settings.schoolDay ||= "周一";
@@ -197,6 +197,7 @@ function normalizeState(state) {
   state.bulletins ||= [];
   state.emojis ||= defaultEmojis();
   state.relationships ||= [];
+  state.chatMemberRequests ||= [];
   state.auditLog ||= [];
   state.undoStack ||= [];
 
@@ -225,6 +226,17 @@ function normalizeState(state) {
     updatedAt: relationship.updatedAt || relationship.createdAt || new Date().toISOString()
   })).filter((relationship) => relationship.requesterId && relationship.targetId);
 
+  state.chatMemberRequests = state.chatMemberRequests.map((request) => ({
+    id: request.id || id("chat_req"),
+    chatId: request.chatId,
+    requesterId: request.requesterId,
+    targetId: request.targetId,
+    action: request.action === "remove" ? "remove" : "add",
+    status: ["pending", "accepted", "rejected"].includes(request.status) ? request.status : "pending",
+    createdAt: request.createdAt || new Date().toISOString(),
+    updatedAt: request.updatedAt || request.createdAt || new Date().toISOString()
+  })).filter((request) => request.chatId && request.requesterId && request.targetId);
+
   state.settings.currentDayId = normalizeCalendarDayId(state.settings.currentDayId);
   state.calendarDays = normalizeCalendarDays(state.calendarDays);
   if (!state.calendarDays.some((day) => day.id === state.settings.currentDayId)) {
@@ -236,6 +248,7 @@ function normalizeState(state) {
   for (const post of state.posts) {
     post.metrics = normalizeMetrics(post.metrics);
     post.replies ||= [];
+    post.isAnonymous = post.isAnonymous === true;
     if (post.imageData && !post.attachment) {
       post.attachment = { type: "image", dataUrl: post.imageData, name: "image" };
       delete post.imageData;
@@ -704,12 +717,19 @@ function publicState(state) {
       ? { ...message, authorId: "" }
       : message
   ));
+  const posts = (state.posts || []).map((post) => (
+    !adminView && post.isAnonymous
+      ? { ...post, authorId: "" }
+      : post
+  ));
 
   return {
     ...state,
     characters: state.characters.map(({ accessToken, auth, ...character }) => character),
     calendarDays,
+    posts,
     messages,
+    chatMemberRequests: adminView ? (state.chatMemberRequests || []) : [],
     bulletins: adminView ? state.bulletins : (state.bulletins || []).filter((bulletin) => bulletin.isPublic !== false),
     auditLog: adminView ? (state.auditLog || []) : [],
     undoStack: adminView
@@ -797,6 +817,23 @@ function canDirectMessage(state, sourceId, targetId) {
       (relationship.requesterId === targetId && relationship.targetId === sourceId)
     )
   ));
+}
+
+function canRequestChatMemberChange(req, state, chat, requester, target, action) {
+  if (isAdmin(req)) return { ok: true };
+  if (!chat.memberIds.includes(requester.id)) {
+    return { ok: false, status: 403, error: "Only current chat members can request member changes." };
+  }
+  if (chat.type === "direct") {
+    return { ok: false, status: 400, error: "Direct chat members cannot be changed." };
+  }
+  if (chat.isPublic) {
+    return { ok: false, status: 400, error: "Public chat membership is managed by GM." };
+  }
+  if (action === "add" && !canDirectMessage(state, requester.id, target.id)) {
+    return { ok: false, status: 403, error: "GM must approve the follow request before this account can be invited." };
+  }
+  return { ok: true };
 }
 
 function directChatFor(state, firstId, secondId) {
@@ -1243,7 +1280,7 @@ async function routeApi(req, res, url) {
       .filter(Boolean);
     if (!accounts.length) return sendJson(res, 400, { error: "No active player accounts selected." });
 
-    pushUndo(state, "delete_player_accounts", `批量删除玩家账号：${accounts.length} 个`, ["characters", "chats", "relationships"], { count: accounts.length, accountIds: accounts.map((account) => account.id) });
+    pushUndo(state, "delete_player_accounts", `批量删除玩家账号：${accounts.length} 个`, ["characters", "chats", "relationships", "chatMemberRequests"], { count: accounts.length, accountIds: accounts.map((account) => account.id) });
     const accountIds = new Set(accounts.map((account) => account.id));
     const now = new Date().toISOString();
     for (const account of accounts) {
@@ -1255,6 +1292,9 @@ async function routeApi(req, res, url) {
     }
     state.relationships = (state.relationships || []).filter((relationship) => (
       !accountIds.has(relationship.requesterId) && !accountIds.has(relationship.targetId)
+    ));
+    state.chatMemberRequests = (state.chatMemberRequests || []).filter((request) => (
+      !accountIds.has(request.requesterId) && !accountIds.has(request.targetId)
     ));
 
     writeState(state);
@@ -1601,7 +1641,7 @@ async function routeApi(req, res, url) {
     const characters = state.characters.filter((character) => character.active !== false);
     if (!characters.length) return sendJson(res, 400, { error: "No active characters to delete." });
 
-    pushUndo(state, "delete_all_characters", `删除全部角色：${characters.length} 个`, ["characters", "chats", "relationships"], { count: characters.length });
+    pushUndo(state, "delete_all_characters", `删除全部角色：${characters.length} 个`, ["characters", "chats", "relationships", "chatMemberRequests"], { count: characters.length });
     const characterIds = new Set(characters.map((character) => character.id));
     const now = new Date().toISOString();
     for (const character of characters) {
@@ -1613,6 +1653,9 @@ async function routeApi(req, res, url) {
     }
     state.relationships = (state.relationships || []).filter((relationship) => (
       !characterIds.has(relationship.requesterId) && !characterIds.has(relationship.targetId)
+    ));
+    state.chatMemberRequests = (state.chatMemberRequests || []).filter((request) => (
+      !characterIds.has(request.requesterId) && !characterIds.has(request.targetId)
     ));
     writeState(state);
     sendJson(res, 200, {
@@ -1632,7 +1675,7 @@ async function routeApi(req, res, url) {
       return;
     }
 
-    pushUndo(state, "delete_character", `删除角色：${character.name}`, ["characters", "chats", "relationships"], { characterId });
+    pushUndo(state, "delete_character", `删除角色：${character.name}`, ["characters", "chats", "relationships", "chatMemberRequests"], { characterId });
     character.active = false;
     character.deletedAt = new Date().toISOString();
     for (const chat of state.chats) {
@@ -1640,6 +1683,9 @@ async function routeApi(req, res, url) {
     }
     state.relationships = (state.relationships || []).filter((relationship) => (
       relationship.requesterId !== character.id && relationship.targetId !== character.id
+    ));
+    state.chatMemberRequests = (state.chatMemberRequests || []).filter((request) => (
+      request.requesterId !== character.id && request.targetId !== character.id
     ));
     writeState(state);
     sendJson(res, 200, publicState(state));
@@ -1796,6 +1842,94 @@ async function routeApi(req, res, url) {
     return;
   }
 
+  const chatMemberRequestMatch = url.pathname.match(/^\/api\/chats\/([^/]+)\/member-requests$/);
+  if (req.method === "POST" && chatMemberRequestMatch) {
+    const chatId = decodeURIComponent(chatMemberRequestMatch[1]);
+    const chat = state.chats.find((item) => item.id === chatId);
+    if (!chat) return sendJson(res, 404, { error: "Chat not found." });
+    const requester = authorizeAuthor(req, res, state, body.requesterId);
+    if (!requester) return;
+    const target = findCharacter(state, body.targetId);
+    if (!target) return sendJson(res, 400, { error: "Target character not found." });
+    const action = body.action === "remove" ? "remove" : "add";
+
+    if (action === "add" && chat.memberIds.includes(target.id)) {
+      return sendJson(res, 400, { error: "That character is already in this chat." });
+    }
+    if (action === "remove" && !chat.memberIds.includes(target.id)) {
+      return sendJson(res, 400, { error: "That character is not in this chat." });
+    }
+    if (action === "remove" && chat.memberIds.length <= 1) {
+      return sendJson(res, 400, { error: "A chat needs at least one member." });
+    }
+
+    const allowed = canRequestChatMemberChange(req, state, chat, requester, target, action);
+    if (!allowed.ok) return sendJson(res, allowed.status, { error: allowed.error });
+
+    const existing = (state.chatMemberRequests || []).find((request) => (
+      request.chatId === chat.id &&
+      request.targetId === target.id &&
+      request.action === action &&
+      request.status === "pending"
+    ));
+    if (existing) {
+      sendJson(res, 200, { state: publicState(state), requestId: existing.id, existing: true });
+      return;
+    }
+
+    const request = {
+      id: id("chat_req"),
+      chatId: chat.id,
+      requesterId: requester.id,
+      targetId: target.id,
+      action,
+      status: "pending",
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString()
+    };
+    state.chatMemberRequests.push(request);
+    writeState(state);
+    sendJson(res, 201, { state: publicState(state), requestId: request.id });
+    return;
+  }
+
+  if (req.method === "PATCH" && url.pathname.startsWith("/api/chat-member-requests/")) {
+    if (!requireAdmin(req, res)) return;
+    const requestId = decodeURIComponent(url.pathname.split("/").pop());
+    const request = state.chatMemberRequests.find((item) => item.id === requestId);
+    if (!request) return sendJson(res, 404, { error: "Chat member request not found." });
+    if (request.status !== "pending") {
+      return sendJson(res, 400, { error: "This request has already been handled." });
+    }
+    if (!["accepted", "rejected"].includes(body.status)) {
+      return sendJson(res, 400, { error: "Request status must be accepted or rejected." });
+    }
+
+    const chat = state.chats.find((item) => item.id === request.chatId);
+    if (!chat) return sendJson(res, 404, { error: "Chat not found." });
+    const target = findCharacter(state, request.targetId);
+    if (body.status === "accepted" && request.action === "add" && !target) {
+      return sendJson(res, 400, { error: "Target character is no longer active." });
+    }
+
+    const targetName = target?.name || request.targetId;
+    const actionLabel = request.action === "add" ? "邀请" : "移除";
+    pushUndo(state, "update_chat_member_request", `${body.status === "accepted" ? "批准" : "拒绝"}群聊${actionLabel}：${chat.name} / ${targetName}`, ["chats", "chatMemberRequests"], { requestId, chatId: chat.id, targetId: request.targetId });
+    request.status = body.status;
+    request.updatedAt = new Date().toISOString();
+    if (body.status === "accepted") {
+      if (request.action === "add" && !chat.memberIds.includes(request.targetId)) {
+        chat.memberIds.push(request.targetId);
+      }
+      if (request.action === "remove") {
+        chat.memberIds = chat.memberIds.filter((memberId) => memberId !== request.targetId);
+      }
+    }
+    writeState(state);
+    sendJson(res, 200, publicState(state));
+    return;
+  }
+
   if (req.method === "POST" && url.pathname === "/api/feed/posts") {
     const author = authorizeAuthor(req, res, state, body.authorId);
     const content = String(body.content || "").trim();
@@ -1821,6 +1955,7 @@ async function routeApi(req, res, url) {
       authorId: author.id,
       content,
       attachment,
+      isAnonymous: body.isAnonymous === true,
       gameTime: String(body.gameTime || state.settings.gameTime).trim(),
       createdAt: new Date().toISOString(),
       metrics: normalizeMetrics(body.metrics),
@@ -1945,9 +2080,10 @@ async function routeApi(req, res, url) {
       }
     }
 
-    pushUndo(state, "delete_chat", `删除聊天：${chat.name}`, ["chats", "messages"], { chatId, actorId: actor?.id || "" });
+    pushUndo(state, "delete_chat", `删除聊天：${chat.name}`, ["chats", "messages", "chatMemberRequests"], { chatId, actorId: actor?.id || "" });
     state.chats = state.chats.filter((item) => item.id !== chat.id);
     state.messages = state.messages.filter((message) => message.chatId !== chat.id);
+    state.chatMemberRequests = (state.chatMemberRequests || []).filter((request) => request.chatId !== chat.id);
     writeState(state);
     sendJson(res, 200, publicState(state));
     return;
@@ -2091,7 +2227,10 @@ function exportMarkdown(state) {
   lines.push("## SNS 时间线", "");
   for (const post of [...state.posts].sort((a, b) => String(a.createdAt).localeCompare(String(b.createdAt)))) {
     const author = byId.get(post.authorId);
-    lines.push(`### ${post.gameTime} | ${author?.name || "Unknown"} ${author?.handle || ""}`);
+    const authorLabel = post.isAnonymous
+      ? `匿名${author ? `（${author.name} ${author.handle || ""}）` : ""}`
+      : `${author?.name || "Unknown"} ${author?.handle || ""}`;
+    lines.push(`### ${post.gameTime} | ${authorLabel}`);
     lines.push("");
     lines.push(post.content);
     if (post.attachment?.type === "image") {

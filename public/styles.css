@@ -964,7 +964,7 @@ textarea {
 .inbox-grid,
 .relationship-grid {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
   gap: 10px;
 }
 
@@ -1141,6 +1141,29 @@ textarea {
 .message-form {
   padding: 12px;
   border-top: 1px solid var(--line);
+}
+
+.chat-member-panel {
+  display: grid;
+  gap: 8px;
+  padding: 10px 12px;
+  border-top: 1px solid var(--line);
+  background: rgba(0, 166, 103, 0.06);
+}
+
+.member-change-grid {
+  display: grid;
+  grid-template-columns: minmax(140px, 1fr) auto minmax(140px, 1fr) auto;
+  gap: 8px;
+  align-items: end;
+}
+
+.member-change-grid label {
+  min-width: 0;
+}
+
+.member-change-grid select {
+  min-width: 0;
 }
 
 .message-form textarea {
@@ -2208,6 +2231,10 @@ select:focus {
 
   .roster-control-row,
   .avatar-editor {
+    grid-template-columns: 1fr;
+  }
+
+  .member-change-grid {
     grid-template-columns: 1fr;
   }
 

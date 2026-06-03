@@ -165,6 +165,10 @@ async function handleAction(target) {
   if (action === "request-follow") return requestFollow(target.dataset.characterId);
   if (action === "approve-follow") return updateFollow(target.dataset.followId, "accepted");
   if (action === "reject-follow") return updateFollow(target.dataset.followId, "rejected");
+  if (action === "request-chat-member-add") return requestChatMemberChange("add");
+  if (action === "request-chat-member-remove") return requestChatMemberChange("remove");
+  if (action === "approve-chat-member-request") return updateChatMemberRequest(target.dataset.requestId, "accepted");
+  if (action === "reject-chat-member-request") return updateChatMemberRequest(target.dataset.requestId, "rejected");
   if (action === "open-direct-chat") return openDirectChat(target.dataset.characterId);
   if (action === "toggle-private-chat-form") return togglePrivateChatForm();
   if (action === "create-player-chat") return createPlayerPrivateChat();
@@ -307,6 +311,10 @@ function renderFeed() {
         <textarea id="post-content" maxlength="280" placeholder="${actor ? "现在发生了什么？" : "先创建玩家账号"}" ${actor ? "" : "disabled"}></textarea>
         <div class="message-tools post-tools">
           ${renderEmojiBar("post-content")}
+          <label class="checkbox-line compact-checkbox">
+            <input id="post-anonymous" type="checkbox" ${actor ? "" : "disabled"}>
+            <span>匿名发布</span>
+          </label>
           <label class="file-picker">图片
             <input id="post-image" type="file" accept="image/*" ${actor ? "" : "disabled"}>
           </label>
@@ -369,7 +377,16 @@ function renderBulletinCard(bulletin) {
 }
 
 function renderPost(post) {
+  const isAnonymous = post.isAnonymous === true;
   const author = getActor(post.authorId);
+  const profileId = isAnonymous && !stateBag.gmUnlocked ? "" : author?.id || "";
+  const displayName = isAnonymous
+    ? (stateBag.gmUnlocked && author ? `匿名（${author.name}）` : "匿名")
+    : (author?.name || "未知");
+  const handleLine = [
+    isAnonymous && stateBag.gmUnlocked && author ? author.handle : (!isAnonymous ? author?.handle : ""),
+    post.gameTime
+  ].filter(Boolean).join(" · ");
   const replies = post.replies || [];
   const admin = stateBag.gmUnlocked ? `
     <div class="admin-box">
@@ -389,11 +406,11 @@ function renderPost(post) {
   return `
     <article class="post">
       <header class="post-header">
-        <button class="profile-link author-line" type="button" data-action="view-profile" data-character-id="${author?.id || ""}" ${author ? "" : "disabled"}>
-          ${renderAvatar(author)}
+        <button class="profile-link author-line" type="button" data-action="view-profile" data-character-id="${profileId}" ${profileId ? "" : "disabled"}>
+          ${isAnonymous ? renderAnonymousAvatar() : renderAvatar(author)}
           <div class="name-block">
-            <div class="name">${escapeHtml(author?.name || "未知")}</div>
-            <div class="handle">${escapeHtml(author?.handle || "")} · ${escapeHtml(post.gameTime)}</div>
+            <div class="name">${escapeHtml(displayName)}</div>
+            <div class="handle">${escapeHtml(handleLine)}</div>
           </div>
         </button>
       </header>
@@ -494,6 +511,7 @@ function renderChats() {
           </div>
           ${canDeleteChat(active) ? `<button class="danger-button compact-action" type="button" data-action="delete-chat" data-chat-id="${escapeAttr(active.id)}">删除聊天</button>` : ""}
         </header>
+        ${renderChatMemberRequestPanel(active)}
         <div class="messages" id="messages">
           ${messages.map(renderMessage).join("") || `<div class="hint">这里还没有消息。</div>`}
         </div>
@@ -518,6 +536,42 @@ function renderChats() {
 
   const messageBox = document.getElementById("messages");
   if (messageBox) messageBox.scrollTop = messageBox.scrollHeight;
+}
+
+function renderChatMemberRequestPanel(chat) {
+  const actor = currentActor();
+  if (!chat || !actor || stateBag.gmUnlocked) return "";
+  if (chat.type === "direct" || chat.isPublic || !chat.memberIds.includes(actor.id)) return "";
+
+  const inviteCandidates = acceptedContacts().filter((character) => !chat.memberIds.includes(character.id));
+  const removeCandidates = chat.memberIds
+    .map((memberId) => getActor(memberId))
+    .filter((member) => member && member.id !== actor.id);
+  const inviteOptions = inviteCandidates.map((character) => `<option value="${escapeAttr(character.id)}">${escapeHtml(character.name)} ${escapeHtml(character.handle || "")}</option>`).join("");
+  const removeOptions = removeCandidates.map((character) => `<option value="${escapeAttr(character.id)}">${escapeHtml(character.name)} ${escapeHtml(character.handle || "")}</option>`).join("");
+
+  return `
+    <div class="chat-member-panel">
+      <div>
+        <div class="mini-title">成员申请</div>
+        <div class="hint">邀请或移除成员需要 GM 后台批准后才会生效。</div>
+      </div>
+      <div class="member-change-grid">
+        <label>邀请角色
+          <select id="chat-add-member" ${inviteCandidates.length ? "" : "disabled"}>
+            ${inviteOptions || `<option value="">暂无可邀请联系人</option>`}
+          </select>
+        </label>
+        <button class="secondary-button compact-action" type="button" data-action="request-chat-member-add" ${inviteCandidates.length ? "" : "disabled"}>申请邀请</button>
+        <label>移除角色
+          <select id="chat-remove-member" ${removeCandidates.length ? "" : "disabled"}>
+            ${removeOptions || `<option value="">暂无可移除成员</option>`}
+          </select>
+        </label>
+        <button class="danger-button compact-action" type="button" data-action="request-chat-member-remove" ${removeCandidates.length ? "" : "disabled"}>申请移除</button>
+      </div>
+    </div>
+  `;
 }
 
 function renderMessage(message) {
@@ -821,8 +875,31 @@ function renderFollowRequest(relationship) {
   `;
 }
 
+function renderChatMemberRequest(request) {
+  const requester = getActor(request.requesterId);
+  const target = getActor(request.targetId);
+  const chat = getChat(request.chatId);
+  const actionLabel = request.action === "remove" ? "移除" : "邀请";
+  return `
+    <div class="follow-row">
+      <div class="follow-people">
+        ${renderAvatar(requester)}
+        <div class="name-block">
+          <div class="name">${escapeHtml(requester?.name || "未知")} 申请${actionLabel} ${escapeHtml(target?.name || "未知角色")}</div>
+          <div class="handle">${escapeHtml(chat?.name || "未知群聊")} · ${escapeHtml(requester?.handle || "")} → ${escapeHtml(target?.handle || "")}</div>
+        </div>
+      </div>
+      <div class="form-row tight">
+        <button class="primary-button" type="button" data-action="approve-chat-member-request" data-request-id="${escapeAttr(request.id)}">批准</button>
+        <button class="danger-button" type="button" data-action="reject-chat-member-request" data-request-id="${escapeAttr(request.id)}">拒绝</button>
+      </div>
+    </div>
+  `;
+}
+
 function renderGmInbox() {
   const pendingFollows = (stateBag.data.relationships || []).filter((item) => item.status === "pending");
+  const pendingChatMemberRequests = (stateBag.data.chatMemberRequests || []).filter((item) => item.status === "pending");
   const recentMessages = [...(stateBag.data.messages || [])]
     .sort((a, b) => String(b.createdAt).localeCompare(String(a.createdAt)))
     .slice(0, 8);
@@ -838,6 +915,10 @@ function renderGmInbox() {
         <div class="inbox-column">
           <div class="mini-title">关注请求</div>
           ${pendingFollows.map(renderFollowRequest).join("") || `<div class="hint padded">No pending follows.</div>`}
+        </div>
+        <div class="inbox-column">
+          <div class="mini-title">群成员申请</div>
+          ${pendingChatMemberRequests.map(renderChatMemberRequest).join("") || `<div class="hint padded">No pending chat member requests.</div>`}
         </div>
         <div class="inbox-column">
           <div class="mini-title">最新聊天</div>
@@ -1390,6 +1471,7 @@ async function publishPost() {
   const textarea = document.getElementById("post-content");
   const content = textarea?.value.trim();
   const imageInput = document.getElementById("post-image");
+  const anonymousInput = document.getElementById("post-anonymous");
   const imageFile = imageInput?.files?.[0];
   const attachment = imageFile
     ? { type: "image", dataUrl: await fileToImageDataUrl(imageFile, 1400, 0.86, 8500000), name: imageFile.name }
@@ -1397,10 +1479,11 @@ async function publishPost() {
   if (!content && !attachment) return showNotice("帖子内容或图片为空。");
   await api("/api/feed/posts", {
     method: "POST",
-    body: { authorId: stateBag.actorId, content, attachment }
+    body: { authorId: stateBag.actorId, content, attachment, isAnonymous: anonymousInput?.checked === true }
   });
   textarea.value = "";
   if (imageInput) imageInput.value = "";
+  if (anonymousInput) anonymousInput.checked = false;
   const hint = document.getElementById("post-image-hint");
   if (hint) hint.textContent = "未选择图片";
   await refresh(true);
@@ -2131,6 +2214,37 @@ async function updateFollow(followId, status) {
     body: { status }
   });
   showNotice(status === "accepted" ? "关注已批准，可以私聊了。" : "关注请求已拒绝。");
+  render();
+}
+
+async function requestChatMemberChange(action) {
+  if (!currentActor()) return showNotice("请先创建或登录玩家账号。");
+  const chat = getChat(stateBag.activeChatId);
+  if (!chat) return showNotice("请选择群聊。");
+  const selectId = action === "remove" ? "chat-remove-member" : "chat-add-member";
+  const targetId = document.getElementById(selectId)?.value;
+  if (!targetId) return showNotice(action === "remove" ? "请选择要移除的角色。" : "请选择要邀请的角色。");
+  const result = await api(`/api/chats/${encodeURIComponent(chat.id)}/member-requests`, {
+    method: "POST",
+    body: {
+      requesterId: stateBag.actorId,
+      targetId,
+      action
+    }
+  });
+  stateBag.data = result.state;
+  showNotice(result.existing ? "已有相同申请在等待 GM 审批。" : "申请已发送，等待 GM 批准。");
+  render();
+}
+
+async function updateChatMemberRequest(requestId, status) {
+  if (!requestId) return;
+  stateBag.data = await api(`/api/chat-member-requests/${encodeURIComponent(requestId)}`, {
+    method: "PATCH",
+    admin: true,
+    body: { status }
+  });
+  showNotice(status === "accepted" ? "群成员申请已批准。" : "群成员申请已拒绝。");
   render();
 }
 
