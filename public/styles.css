@@ -3372,3 +3372,202 @@ select:focus {
     min-height: 300px;
   }
 }
+
+/* Mobile chat rescue: keep the conversation visible and scroll messages inside the thread. */
+@media (max-width: 880px) {
+  .side-panel {
+    max-height: 42dvh;
+    padding: 12px 12px 14px;
+    gap: 10px;
+    overflow: auto;
+  }
+
+  .brand-row {
+    min-height: 52px;
+    padding-bottom: 8px;
+    align-items: center;
+  }
+
+  .brand-row::after {
+    display: none;
+  }
+
+  .brand-mark {
+    width: 42px;
+    height: 42px;
+  }
+
+  .brand-title {
+    font-size: 16px;
+  }
+
+  .identity-panel {
+    padding: 10px;
+    gap: 8px;
+  }
+
+  .identity-panel .actor-preview {
+    min-height: 36px;
+  }
+
+  .account-tools {
+    max-height: 160px;
+    overflow: auto;
+  }
+
+  .workspace {
+    padding-inline: 10px;
+    padding-top: 10px;
+  }
+
+  .top-bar {
+    min-height: 76px;
+    padding: 12px;
+  }
+
+  .gm-quickbar {
+    max-height: 28dvh;
+    overflow: auto;
+  }
+
+  .chat-layout,
+  .chat-layout.with-drawer {
+    gap: 8px;
+  }
+
+  .chat-layout > .room-list {
+    max-height: 168px;
+    padding: 8px;
+    gap: 6px;
+  }
+
+  .chat-layout > .thread {
+    height: min(680px, calc(100dvh - 96px));
+    min-height: 500px;
+  }
+
+  .thread {
+    grid-template-rows: auto minmax(0, 1fr) auto auto;
+  }
+
+  .thread-header {
+    padding: 10px 12px;
+    gap: 8px;
+  }
+
+  .thread-header .member-links {
+    max-height: 34px;
+    overflow: auto;
+  }
+
+  .messages {
+    min-height: 0;
+    padding: 10px;
+    gap: 8px;
+  }
+
+  .message-bubble {
+    max-width: 92%;
+    padding: 8px 10px;
+  }
+
+  .message-form {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: 6px;
+    align-items: end;
+    padding: 6px;
+  }
+
+  .message-form textarea {
+    grid-column: 1;
+    min-height: 42px;
+    max-height: 88px;
+    width: 100%;
+  }
+
+  .message-form > .primary-button {
+    grid-column: 2;
+    grid-row: 1;
+    align-self: stretch;
+    min-width: 64px;
+    min-height: 42px;
+    padding-inline: 10px;
+  }
+
+  .message-tools {
+    grid-column: 1 / -1;
+    width: 100%;
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    overflow-y: hidden;
+    max-height: 38px;
+    padding-bottom: 2px;
+  }
+
+  .message-tools .emoji-bar {
+    flex: 0 0 auto;
+    flex-wrap: nowrap;
+    gap: 4px;
+  }
+
+  .message-tools .emoji-button,
+  .message-tools .file-picker,
+  .message-tools .compact-checkbox,
+  .message-tools .hint {
+    flex: 0 0 auto;
+  }
+
+  .message-tools .emoji-button {
+    width: 30px;
+    height: 30px;
+    font-size: 16px;
+  }
+
+  .message-tools .file-picker,
+  .message-tools .compact-checkbox {
+    min-height: 30px;
+    padding: 5px 8px;
+    font-size: 12px;
+  }
+
+  .message-tools .hint {
+    max-width: 120px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .room-entry {
+    grid-template-columns: 48px minmax(0, 1fr);
+  }
+
+  .pin-chat-button {
+    width: 48px;
+    padding-inline: 4px;
+    font-size: 11px;
+  }
+}
+
+@media (max-width: 520px) {
+  .side-panel {
+    max-height: 36dvh;
+  }
+
+  .message-form > * {
+    width: auto;
+  }
+
+  .message-form textarea,
+  .message-form .message-tools {
+    width: 100%;
+  }
+
+  .chat-layout > .thread {
+    min-height: 520px;
+  }
+
+  .chat-layout > .room-list {
+    max-height: 150px;
+  }
+}

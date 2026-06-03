@@ -347,6 +347,7 @@ function setTab(tab) {
   stateBag.tab = tab;
   localStorage.setItem("kokubayashi.tab", tab);
   render();
+  scrollViewIntoMobileFocus();
 }
 
 function render() {
@@ -369,6 +370,14 @@ function canAutoRender() {
   if (["TEXTAREA", "INPUT", "SELECT"].includes(tag)) return false;
   if (hasPendingFileSelection()) return false;
   return !hasDraftText();
+}
+
+function scrollViewIntoMobileFocus() {
+  if (!window.matchMedia?.("(max-width: 880px)").matches) return;
+  setTimeout(() => {
+    const top = (els.viewRoot?.getBoundingClientRect().top || 0) + window.scrollY - 8;
+    window.scrollTo({ top: Math.max(0, top), behavior: "auto" });
+  }, 0);
 }
 
 function hasPendingFileSelection() {
