@@ -16,6 +16,8 @@ const MAX_AVATAR_DATA_URL_LENGTH = 2500000;
 const MAX_EMOJI_DATA_URL_LENGTH = 1000000;
 const MAX_POST_IMAGE_DATA_URL_LENGTH = 9000000;
 const MAX_CHAT_IMAGE_DATA_URL_LENGTH = 9000000;
+const MAX_POST_CONTENT_LENGTH = 2000;
+const MAX_REPLY_CONTENT_LENGTH = 1000;
 const MAX_ACCOUNT_IMPORT_COUNT = 120;
 const MAX_CHARACTER_IMPORT_COUNT = 200;
 
@@ -198,6 +200,7 @@ function normalizeState(state) {
   state.settings.currentDayId ||= "day_mon";
   state.settings.feedName ||= "Kokubayashi SNS";
   state.settings.chatName ||= "K-LINE";
+  state.settings.autoAdvanceTimelineTime = state.settings.autoAdvanceTimelineTime === true;
   state.characters ||= [];
   state.chats ||= [];
   state.calendarDays ||= defaultCalendarDays();
@@ -264,6 +267,9 @@ function normalizeState(state) {
     post.isAnonymous = post.isAnonymous === true;
     for (const reply of post.replies) {
       reply.isAnonymous = reply.isAnonymous === true;
+      reply.parentReplyId = String(reply.parentReplyId || "").trim();
+      reply.gameTime = String(reply.gameTime || state.settings.gameTime || "").trim();
+      reply.createdAt ||= new Date().toISOString();
     }
     if (post.imageData && !post.attachment) {
       post.attachment = { type: "image", dataUrl: post.imageData, name: "image" };
@@ -472,6 +478,70 @@ function parseGameTimeMinutes(value) {
   if (isAm && hour === 12) hour = 0;
   if (hour < 0 || hour > 23) return null;
   return hour * 60 + minute;
+}
+
+function advanceGameTimeString(value, minutes) {
+  const text = String(value || "").trim();
+  const match = text.match(/([01]?\d|2[0-3])\s*([:：])\s*([0-5]\d)/);
+  if (!match) return text;
+
+  const currentMinutes = Number(match[1]) * 60 + Number(match[3]);
+  const nextMinutes = (currentMinutes + minutes) % 1440;
+  const hour = String(Math.floor(nextMinutes / 60)).padStart(2, "0");
+  const minute = String(nextMinutes % 60).padStart(2, "0");
+  return `${text.slice(0, match.index)}${hour}${match[2]}${minute}${text.slice(match.index + match[0].length)}`;
+}
+
+function advanceTimelineGameTime(state) {
+  const minutes = Math.floor(Math.random() * 5) + 1;
+  state.settings.gameTime = advanceGameTimeString(state.settings.gameTime, minutes);
+  return minutes;
+}
+
+function findPostReply(post, replyId) {
+  return (post.replies || []).find((reply) => reply.id === replyId);
+}
+
+function removePostReply(post, replyId) {
+  const replies = post.replies || [];
+  const childIds = new Set([replyId]);
+  let changed = true;
+  while (changed) {
+    changed = false;
+    for (const reply of replies) {
+      if (!childIds.has(reply.id) && childIds.has(reply.parentReplyId)) {
+        childIds.add(reply.id);
+        changed = true;
+      }
+    }
+  }
+  post.replies = replies.filter((reply) => !childIds.has(reply.id));
+  return childIds.size;
+}
+
+function postReplyChildrenByParent(replies) {
+  const ids = new Set((replies || []).map((reply) => reply.id));
+  const byParent = new Map();
+  for (const reply of replies || []) {
+    const parentId = ids.has(reply.parentReplyId) ? reply.parentReplyId : "";
+    if (!byParent.has(parentId)) byParent.set(parentId, []);
+    byParent.get(parentId).push(reply);
+  }
+  return byParent;
+}
+
+function appendPostReplyMarkdown(lines, replies, byId) {
+  const byParent = postReplyChildrenByParent(replies || []);
+  const append = (reply, depth) => {
+    const replyAuthor = byId.get(reply.authorId);
+    const replyAuthorLabel = reply.isAnonymous
+      ? `匿名${replyAuthor ? `（${replyAuthor.name}）` : ""}`
+      : (replyAuthor?.name || "Unknown");
+    const indent = "  ".repeat(depth);
+    lines.push(`${indent}- ${reply.gameTime} | ${replyAuthorLabel}：${reply.content}`);
+    for (const child of byParent.get(reply.id) || []) append(child, depth + 1);
+  };
+  for (const reply of byParent.get("") || []) append(reply, 0);
 }
 
 function buildTimelineSortKey(state, dayId, gameTime) {
@@ -1563,6 +1633,9 @@ async function routeApi(req, res, url) {
     }
     state.settings.feedName = String(body.feedName || state.settings.feedName).trim();
     state.settings.chatName = String(body.chatName || state.settings.chatName).trim();
+    if (body.autoAdvanceTimelineTime !== undefined) {
+      state.settings.autoAdvanceTimelineTime = body.autoAdvanceTimelineTime === true;
+    }
     writeState(state);
     sendJson(res, 200, publicState(state));
     return;
@@ -2064,6 +2137,7 @@ async function routeApi(req, res, url) {
     const author = authorizeAuthor(req, res, state, body.authorId);
     const content = String(body.content || "").trim();
     if (!author) return;
+    if (content.length > MAX_POST_CONTENT_LENGTH) return sendJson(res, 400, { error: `Post content can be up to ${MAX_POST_CONTENT_LENGTH} characters.` });
 
     let attachment = null;
     if (body.attachment?.dataUrl) {
@@ -2082,7 +2156,9 @@ async function routeApi(req, res, url) {
     const requestedDayId = body.dayId !== undefined ? resolveTimelineDayId(state, body.dayId) : "";
     if (body.dayId && !requestedDayId) return sendJson(res, 400, { error: "Timeline day was not found." });
     const dayId = requestedDayId || state.settings.currentDayId || "";
-    const gameTime = String(body.gameTime || state.settings.gameTime).trim();
+    const explicitGameTime = body.gameTime !== undefined ? String(body.gameTime || "").trim() : "";
+    if (!explicitGameTime && state.settings.autoAdvanceTimelineTime === true) advanceTimelineGameTime(state);
+    const gameTime = explicitGameTime || String(state.settings.gameTime).trim();
     const createdAt = new Date().toISOString();
     if (isAdmin(req)) pushUndo(state, "create_post", `以 ${author.name} 发布帖子`, ["posts"], { authorId: author.id });
     state.posts.push({
@@ -2112,7 +2188,7 @@ async function routeApi(req, res, url) {
     if (req.method !== "DELETE") return sendJson(res, 404, { error: "API route not found." });
 
     post.replies ||= [];
-    const reply = post.replies.find((item) => item.id === replyId);
+    const reply = findPostReply(post, replyId);
     if (!reply) return sendJson(res, 404, { error: "Reply not found." });
 
     if (!isAdmin(req)) {
@@ -2123,7 +2199,7 @@ async function routeApi(req, res, url) {
 
     const author = findCharacter(state, reply.authorId);
     pushUndo(state, "delete_reply", `删除回复：${author?.name || "Unknown"}`, ["posts"], { postId, replyId, authorId: reply.authorId });
-    post.replies = post.replies.filter((item) => item.id !== replyId);
+    removePostReply(post, replyId);
     writeState(state);
     sendJson(res, 200, publicState(state));
     return;
@@ -2148,11 +2224,16 @@ async function routeApi(req, res, url) {
       const content = String(body.content || "").trim();
       if (!author) return;
       if (!content) return sendJson(res, 400, { error: "Reply content is required." });
+      if (content.length > MAX_REPLY_CONTENT_LENGTH) return sendJson(res, 400, { error: `Reply content can be up to ${MAX_REPLY_CONTENT_LENGTH} characters.` });
+      post.replies ||= [];
+      const parentReplyId = String(body.parentReplyId || "").trim();
+      if (parentReplyId && !findPostReply(post, parentReplyId)) return sendJson(res, 404, { error: "Parent reply not found." });
       if (isAdmin(req)) pushUndo(state, "create_reply", `Reply to post as ${author.name}`, ["posts"], { postId, authorId: author.id });
       post.replies.push({
         id: id("reply"),
         authorId: author.id,
         content,
+        parentReplyId,
         isAnonymous: body.isAnonymous === true,
         gameTime: String(body.gameTime || state.settings.gameTime).trim(),
         createdAt: new Date().toISOString()
@@ -2166,7 +2247,11 @@ async function routeApi(req, res, url) {
       if (!requireAdmin(req, res)) return;
       pushUndo(state, "edit_post", "编辑帖子数据 / 时间", ["posts"], { postId });
       if (body.authorId && findCharacter(state, body.authorId)) post.authorId = body.authorId;
-      if (body.content !== undefined) post.content = String(body.content).trim();
+      if (body.content !== undefined) {
+        const nextContent = String(body.content).trim();
+        if (nextContent.length > MAX_POST_CONTENT_LENGTH) return sendJson(res, 400, { error: `Post content can be up to ${MAX_POST_CONTENT_LENGTH} characters.` });
+        post.content = nextContent;
+      }
       if (body.gameTime !== undefined) post.gameTime = String(body.gameTime).trim();
       if (body.dayId !== undefined) {
         const nextDayId = resolveTimelineDayId(state, body.dayId);
@@ -2388,13 +2473,7 @@ function exportMarkdown(state) {
     if (post.replies?.length) {
       lines.push("");
       lines.push("回复：");
-      for (const reply of post.replies) {
-        const replyAuthor = byId.get(reply.authorId);
-        const replyAuthorLabel = reply.isAnonymous
-          ? `匿名${replyAuthor ? `（${replyAuthor.name}）` : ""}`
-          : (replyAuthor?.name || "Unknown");
-        lines.push(`- ${reply.gameTime} | ${replyAuthorLabel}：${reply.content}`);
-      }
+      appendPostReplyMarkdown(lines, post.replies, byId);
     }
     lines.push("");
   }
