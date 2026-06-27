@@ -108,6 +108,9 @@ function bindGlobalEvents() {
       const hint = document.getElementById(`character-avatar-hint-${event.target.dataset.characterId}`);
       if (hint) hint.textContent = event.target.files?.[0]?.name || "未选择头像";
     }
+    if (event.target?.classList?.contains("gm-chat-member-checkbox")) {
+      updateGmChatMemberCount();
+    }
     if (event.target?.id === "gm-schedule-day") {
       stateBag.gmScheduleDayId = event.target.value;
       localStorage.setItem("kokubayashi.gmScheduleDayId", stateBag.gmScheduleDayId);
@@ -264,6 +267,8 @@ async function handleAction(target) {
   if (action === "save-character-tags") return saveCharacterTags(target.dataset.characterId);
   if (action === "delete-character") return deleteCharacter(target.dataset.characterId);
   if (action === "delete-all-characters") return deleteAllCharacters();
+  if (action === "select-visible-gm-chat-members") return setVisibleGmChatMembers(true);
+  if (action === "clear-gm-chat-members") return setVisibleGmChatMembers(false);
   if (action === "create-chat") return createChat();
   if (action === "create-player-account") return createPlayerAccount();
   if (action === "login-player-account") return loginPlayerAccount();
@@ -488,6 +493,22 @@ function filterMemberPicker(input) {
   Array.from(picker.querySelectorAll(".member-option")).forEach((option) => {
     option.hidden = query ? !normalizeSearch(option.textContent).includes(query) : false;
   });
+  updateGmChatMemberCount();
+}
+
+function setVisibleGmChatMembers(checked) {
+  document.querySelectorAll(".gm-chat-member-row").forEach((row) => {
+    if (row.hidden) return;
+    const checkbox = row.querySelector(".gm-chat-member-checkbox");
+    if (checkbox) checkbox.checked = checked;
+  });
+  updateGmChatMemberCount();
+}
+
+function updateGmChatMemberCount() {
+  const count = document.querySelectorAll(".gm-chat-member-checkbox:checked").length;
+  const countNode = document.getElementById("gm-chat-member-count");
+  if (countNode) countNode.textContent = `已选 ${count} 人`;
 }
 
 function renderGmQuickbar() {
@@ -2191,20 +2212,37 @@ function renderGm() {
       </section>
 
       <section>
-        <div class="section-title">新建群聊</div>
-        <div class="form-grid">
-          <label>群名 <input id="new-chat-name"></label>
-          <input class="member-filter-input" placeholder="搜索角色 / @handle / 标签">
-          <div class="member-picker">
-            ${chars.map((character) => `
-              <label class="member-option">
-                <input type="checkbox" class="member-checkbox" value="${character.id}">
-                <span>${escapeHtml(character.name)}</span>
-                ${renderCharacterTags(character)}
-              </label>
-            `).join("")}
+        <div class="section-title">GM 建群</div>
+        <div class="form-grid gm-chat-builder">
+          <label>群名 <input id="new-chat-name" maxlength="80" placeholder="例：放课后调查组 / 二年级群聊"></label>
+          <label class="checkbox-line compact-checkbox">
+            <input id="new-chat-public" type="checkbox">
+            <span>公开群聊（所有账号可见）</span>
+          </label>
+          <div class="gm-chat-member-toolbar">
+            <input class="member-filter-input" placeholder="搜索成员 / @handle / 标签">
+            <button class="secondary-button compact-action" type="button" data-action="select-visible-gm-chat-members">选择可见</button>
+            <button class="ghost-button compact-action" type="button" data-action="clear-gm-chat-members">清空</button>
+            <span id="gm-chat-member-count" class="hint">已选 0 人</span>
           </div>
-          <button class="primary-button" type="button" data-action="create-chat">创建群聊</button>
+          <div class="member-picker gm-chat-member-picker" aria-label="选择群聊成员">
+            ${chars.map((character) => {
+              const tags = characterTags(character);
+              const searchKey = searchableText([character.name, character.handle, character.username, tags.join(" ")]);
+              return `
+                <label class="member-option gm-chat-member-row" data-search="${escapeAttr(searchKey)}">
+                  <input type="checkbox" class="member-checkbox gm-chat-member-checkbox" value="${escapeAttr(character.id)}">
+                  ${renderAvatar(character)}
+                  <span class="name-block">
+                    <span class="name">${escapeHtml(character.name)}</span>
+                    <span class="handle">${escapeHtml(character.handle || "")}</span>
+                    ${renderCharacterTags(character)}
+                  </span>
+                </label>
+              `;
+            }).join("")}
+          </div>
+          <button class="primary-button" type="button" data-action="create-chat">直接创建并打开群聊</button>
         </div>
       </section>
 
@@ -3136,14 +3174,29 @@ function insertEmoji(targetId, value) {
 
 async function createChat() {
   const name = document.getElementById("new-chat-name")?.value.trim();
-  const memberIds = Array.from(document.querySelectorAll(".member-checkbox:checked")).map((item) => item.value);
+  const selectedMembers = document.querySelectorAll(".gm-chat-member-checkbox:checked");
+  const fallbackMembers = document.querySelectorAll(".member-checkbox:checked");
+  const memberIds = Array.from(new Set(Array.from(selectedMembers.length ? selectedMembers : fallbackMembers)
+    .map((item) => item.value)
+    .filter(Boolean)));
+  const isPublic = document.getElementById("new-chat-public")?.checked === true;
   if (!name) return showNotice("群名为空。");
-  await api("/api/chats", {
+  if (!memberIds.length) return showNotice("请选择至少一名群成员。");
+  const previousChatIds = new Set((stateBag.data?.chats || []).map((chat) => chat.id));
+  stateBag.data = await api("/api/chats", {
     method: "POST",
     admin: true,
-    body: { name, memberIds, type: "group" }
+    body: { name, memberIds, type: "group", isPublic }
   });
-  await refresh(true);
+  const createdChat = (stateBag.data?.chats || []).find((chat) => !previousChatIds.has(chat.id));
+  if (createdChat) {
+    stateBag.activeChatId = createdChat.id;
+    localStorage.setItem("kokubayashi.chatId", stateBag.activeChatId);
+  } else {
+    ensureChat();
+  }
+  setTab("chats");
+  showNotice(`群聊「${name}」已创建。`);
 }
 
 function toggleGmSection(sectionId) {

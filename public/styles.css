@@ -1456,6 +1456,67 @@ textarea {
   width: auto;
 }
 
+.gm-chat-builder {
+  gap: 12px;
+}
+
+.gm-chat-member-toolbar {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto auto;
+  gap: 8px;
+  align-items: center;
+}
+
+.gm-chat-member-toolbar .hint {
+  white-space: nowrap;
+  justify-self: end;
+}
+
+.gm-chat-member-picker {
+  max-height: 360px;
+}
+
+.gm-chat-member-row {
+  display: grid;
+  grid-template-columns: auto auto minmax(0, 1fr);
+  gap: 10px;
+  align-items: center;
+  min-height: 54px;
+}
+
+.gm-chat-member-row[hidden] {
+  display: none;
+}
+
+.gm-chat-member-row input {
+  width: 16px;
+  height: 16px;
+}
+
+.gm-chat-member-row .avatar {
+  width: 34px;
+  height: 34px;
+  font-size: 13px;
+}
+
+.gm-chat-member-row .name-block {
+  min-width: 0;
+  display: grid;
+  gap: 2px;
+}
+
+.gm-chat-member-row .name,
+.gm-chat-member-row .handle {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.gm-chat-member-row:has(input:checked) {
+  background: rgba(217, 231, 191, 0.52);
+  box-shadow: inset 4px 0 0 var(--school-green);
+}
+
 .roster-heading {
   display: flex;
   align-items: center;
@@ -3869,5 +3930,25 @@ select:focus {
   body.chat-tab .message-tools .compact-checkbox {
     min-height: 28px;
     padding: 4px 7px;
+  }
+}
+
+@media (max-width: 720px) {
+  .gm-chat-member-toolbar {
+    grid-template-columns: 1fr 1fr;
+  }
+
+  .gm-chat-member-toolbar .member-filter-input {
+    grid-column: 1 / -1;
+  }
+
+  .gm-chat-member-toolbar .hint {
+    justify-self: start;
+  }
+}
+
+@media (max-width: 520px) {
+  .gm-chat-member-toolbar {
+    grid-template-columns: 1fr;
   }
 }
