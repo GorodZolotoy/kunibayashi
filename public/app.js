@@ -1,3 +1,10 @@
+const legacyGmPin = localStorage.getItem("kokubayashi.gmPin") || "";
+const legacyGmUnlocked = localStorage.getItem("kokubayashi.gmUnlocked") === "true";
+if (!sessionStorage.getItem("kokubayashi.gmPin") && legacyGmPin) sessionStorage.setItem("kokubayashi.gmPin", legacyGmPin);
+if (!sessionStorage.getItem("kokubayashi.gmUnlocked") && legacyGmUnlocked) sessionStorage.setItem("kokubayashi.gmUnlocked", "true");
+localStorage.removeItem("kokubayashi.gmPin");
+localStorage.removeItem("kokubayashi.gmUnlocked");
+
 const stateBag = {
   data: null,
   tab: localStorage.getItem("kokubayashi.tab") || "feed",
@@ -22,8 +29,11 @@ const stateBag = {
   chatSearchCollapsed: readLocalBool("kokubayashi.chatSearchCollapsed", window.matchMedia?.("(max-width: 880px)").matches === true),
   feedFilter: normalizeFeedFilter(localStorage.getItem("kokubayashi.feedFilter") || "all"),
   feedSearch: localStorage.getItem("kokubayashi.feedSearch") || "",
+  feedSearchDraft: localStorage.getItem("kokubayashi.feedSearch") || "",
   feedHashtag: normalizeHashtag(localStorage.getItem("kokubayashi.feedHashtag") || ""),
+  feedLimit: 30,
   rosterSearch: localStorage.getItem("kokubayashi.rosterSearch") || "",
+  rosterSearchDraft: localStorage.getItem("kokubayashi.rosterSearch") || "",
   rosterTag: localStorage.getItem("kokubayashi.rosterTag") || "",
   pinnedChatIds: readLocalJson("kokubayashi.pinnedChatIds", []),
   chatReadTimes: readLocalJson("kokubayashi.chatReadTimes", {}),
@@ -31,11 +41,13 @@ const stateBag = {
   chatNewPromptId: "",
   renderedChatId: "",
   renderedLatestMessageId: "",
+  chatMessageLimits: {},
+  chatScrollRestore: null,
   lastGmCreatedAccount: null,
   lastGmImportedAccounts: [],
-  gmPin: localStorage.getItem("kokubayashi.gmPin") || "",
+  gmPin: sessionStorage.getItem("kokubayashi.gmPin") || "",
   accountTokens: readAccountTokens(),
-  gmUnlocked: localStorage.getItem("kokubayashi.gmUnlocked") === "true",
+  gmUnlocked: sessionStorage.getItem("kokubayashi.gmUnlocked") === "true",
   gmAccountView: localStorage.getItem("kokubayashi.gmAccountView") === "true",
   refreshInFlight: false
 };
@@ -63,13 +75,16 @@ const tabNames = {
 };
 
 const HASHTAG_PATTERN = /(^|[^A-Za-z0-9_])#([\p{L}\p{N}_][\p{L}\p{N}_-]{0,48})/gu;
+let messageIndexCache = { source: null, byChat: new Map(), latestByChat: new Map() };
 
 async function boot() {
   bindGlobalEvents();
   await refresh(true);
   setInterval(() => {
     const tag = document.activeElement?.tagName;
-    if (!["TEXTAREA", "INPUT", "SELECT"].includes(tag)) refresh(false);
+    if (!["TEXTAREA", "INPUT", "SELECT"].includes(tag)) {
+      refresh(false).catch((error) => console.warn("Background refresh failed:", error.message));
+    }
   }, 2200);
 }
 
@@ -122,7 +137,8 @@ function bindGlobalEvents() {
       stateBag.actorId = event.target.value;
       localStorage.setItem("kokubayashi.actorId", stateBag.actorId);
       stateBag.openReplyPostId = "";
-      render();
+      if (isGmAccountView()) refresh(true).catch((error) => showNotice(error.message || "视角切换失败。"));
+      else render();
     }
     if (event.target?.id === "quick-preview-select") {
       stateBag.previewPickActorId = event.target.value;
@@ -166,15 +182,11 @@ function bindGlobalEvents() {
       return;
     }
     if (target.id === "feed-search") {
-      stateBag.feedSearch = target.value;
-      localStorage.setItem("kokubayashi.feedSearch", stateBag.feedSearch);
-      renderFeed();
+      stateBag.feedSearchDraft = target.value;
       return;
     }
     if (target.id === "roster-search") {
-      stateBag.rosterSearch = target.value;
-      localStorage.setItem("kokubayashi.rosterSearch", stateBag.rosterSearch);
-      renderGm();
+      stateBag.rosterSearchDraft = target.value;
       return;
     }
   });
@@ -188,16 +200,24 @@ function bindGlobalEvents() {
       event.preventDefault();
       applyChatSearch();
     }
+    if (event.target?.id === "feed-search" && event.key === "Enter") {
+      event.preventDefault();
+      applyFeedSearch();
+    }
+    if (event.target?.id === "roster-search" && event.key === "Enter") {
+      event.preventDefault();
+      applyRosterSearch();
+    }
     if (event.target?.id === "quick-game-time" && event.key === "Enter") {
       event.preventDefault();
       quickSaveTime().catch((error) => showNotice(error.message || "操作失败。"));
     }
   });
 
-  els.actorSelect.addEventListener("change", () => {
+  els.actorSelect.addEventListener("change", async () => {
     stateBag.actorId = els.actorSelect.value;
     localStorage.setItem("kokubayashi.actorId", stateBag.actorId);
-    render();
+    await refresh(true);
   });
   els.actorSearch.addEventListener("input", () => {
     stateBag.actorSearch = els.actorSearch.value;
@@ -216,6 +236,10 @@ async function handleAction(target) {
   if (action === "toggle-gm-account-view") return toggleGmAccountView();
   if (action === "apply-quick-actor-search") return applyQuickActorSearch();
   if (action === "apply-chat-search") return applyChatSearch();
+  if (action === "apply-feed-search") return applyFeedSearch();
+  if (action === "apply-roster-search") return applyRosterSearch();
+  if (action === "load-more-feed") return loadMoreFeed();
+  if (action === "load-older-messages") return loadOlderMessages(target.dataset.chatId);
   if (action === "quick-adjust-time") return quickAdjustTime(target.dataset.minutes);
   if (action === "quick-save-time") return quickSaveTime();
   if (action === "publish-post") return publishPost();
@@ -253,6 +277,8 @@ async function handleAction(target) {
   if (action === "lock-gm") return lockGm();
   if (action === "export-markdown") return downloadGmMarkdown("/api/export.md", "kunibayashi-export");
   if (action === "export-gm-chats") return downloadGmMarkdown("/api/gm/chats/export.md", "kunibayashi-chats");
+  if (action === "export-gm-backup") return downloadGmBackup();
+  if (action === "restore-gm-backup") return restoreGmBackup();
   if (action === "save-settings") return saveSettings();
   if (action === "create-character") return createCharacter();
   if (action === "import-characters") return importCharacters();
@@ -304,12 +330,30 @@ async function refresh(forceRender) {
       ? `/api/state?since=${encodeURIComponent(previousUpdatedAt)}`
       : "/api/state";
     const payload = await api(path);
-    if (payload?.changed === false) return;
-    const data = payload?.changed === true && payload.state ? payload.state : payload;
+    const accountSessionInvalid = payload?.accountSessionInvalid === true;
+    if (accountSessionInvalid && stateBag.actorId) {
+      delete stateBag.accountTokens[stateBag.actorId];
+      saveAccountTokens();
+      stateBag.actorId = "";
+      localStorage.removeItem("kokubayashi.actorId");
+      showNotice("当前账号登录已过期，请重新登录。");
+    }
+    if (payload?.changed === false) {
+      if (payload.updatedAt && stateBag.data) stateBag.data.updatedAt = payload.updatedAt;
+      return;
+    }
+    const data = payload?.changed === true && payload.patch
+      ? { ...stateBag.data, ...payload.patch, updatedAt: payload.updatedAt || payload.patch.updatedAt }
+      : payload?.changed === true && payload.state
+        ? payload.state
+        : payload;
     if (!data?.updatedAt) return;
     stateBag.data = data;
     ensureActor();
     ensureChat();
+    if (accountSessionInvalid && stateBag.actorId && stateBag.accountTokens[stateBag.actorId]) {
+      setTimeout(() => refresh(true).catch((error) => showNotice(error.message || "账号切换失败。")), 0);
+    }
     const changed = previousUpdatedAt !== data.updatedAt;
     if (forceRender || (changed && canAutoRender())) render();
   } finally {
@@ -389,7 +433,7 @@ function scrollViewIntoMobileFocus() {
 }
 
 function hasPendingFileSelection() {
-  return ["post-image", "message-image", "account-avatar", "avatar-update-file", "gm-account-avatar", "new-character-avatar", "emoji-file"]
+  return ["post-image", "message-image", "account-avatar", "avatar-update-file", "gm-account-avatar", "new-character-avatar", "emoji-file", "gm-backup-file"]
     .some((id) => (document.getElementById(id)?.files?.length || 0) > 0)
     || Array.from(document.querySelectorAll(".character-avatar-input")).some((input) => (input.files?.length || 0) > 0);
 }
@@ -615,7 +659,7 @@ function renderFloatingGmToggle() {
   }
   const actor = isGmAccountView() ? currentActor() : null;
   button.className = `gm-view-float ${isGmAccountView() ? "account-view" : "gm-view"}`;
-  button.textContent = isGmAccountView() ? "切回 GM 视角" : "普通账号视角";
+  button.textContent = isGmAccountView() ? "GM 视角" : "账号视角";
   button.title = isGmAccountView()
     ? `账号视角：${actor?.name || "未选择角色"}`
     : "切换到普通账号视角";
@@ -648,6 +692,25 @@ function applyChatSearch() {
   renderChats();
 }
 
+function applyFeedSearch() {
+  const input = document.getElementById("feed-search");
+  const query = input ? input.value : stateBag.feedSearchDraft;
+  stateBag.feedSearchDraft = query;
+  stateBag.feedSearch = query;
+  stateBag.feedLimit = 30;
+  localStorage.setItem("kokubayashi.feedSearch", stateBag.feedSearch);
+  renderFeed();
+}
+
+function applyRosterSearch() {
+  const input = document.getElementById("roster-search");
+  const query = input ? input.value : stateBag.rosterSearchDraft;
+  stateBag.rosterSearchDraft = query;
+  stateBag.rosterSearch = query;
+  localStorage.setItem("kokubayashi.rosterSearch", stateBag.rosterSearch);
+  renderGm();
+}
+
 function isPreviewMode() {
   return stateBag.gmUnlocked && Boolean(stateBag.previewActorId);
 }
@@ -671,11 +734,14 @@ function currentPreviewActor() {
 function isPreviewAllowedAction(action) {
   return [
     "set-feed-filter",
+    "apply-feed-search",
+    "load-more-feed",
     "filter-hashtag",
     "clear-feed-hashtag",
     "select-chat",
     "toggle-pin-chat",
     "jump-latest",
+    "load-older-messages",
     "toggle-member-drawer",
     "select-calendar-month",
     "select-calendar-day",
@@ -710,19 +776,37 @@ function unreadChatCount() {
   return chats.reduce((sum, chat) => sum + unreadMessagesForChat(chat).length, 0);
 }
 
+function indexedMessages() {
+  const source = stateBag.data?.messages || [];
+  if (messageIndexCache.source === source) return messageIndexCache;
+  const byChat = new Map();
+  for (const message of source) {
+    const list = byChat.get(message.chatId) || [];
+    list.push(message);
+    byChat.set(message.chatId, list);
+  }
+  const latestByChat = new Map();
+  for (const [chatId, messages] of byChat.entries()) {
+    messages.sort((a, b) => String(a.createdAt || "").localeCompare(String(b.createdAt || "")));
+    latestByChat.set(chatId, messages[messages.length - 1] || null);
+  }
+  messageIndexCache = { source, byChat, latestByChat };
+  return messageIndexCache;
+}
+
 function unreadMessagesForChat(chat) {
   if (!chat) return [];
   const readTime = stateBag.chatReadTimes[chat.id] || "";
   const actorId = effectiveActorId();
-  return (stateBag.data?.messages || []).filter((message) => (
-    message.chatId === chat.id &&
+  return (indexedMessages().byChat.get(chat.id) || []).filter((message) => (
     (!readTime || String(message.createdAt).localeCompare(String(readTime)) > 0) &&
     (!actorId || message.authorId !== actorId)
   ));
 }
 
 function renderFeed() {
-  const posts = filteredFeedPosts(sortTimelinePosts(stateBag.data.posts || []));
+  const filteredPosts = filteredFeedPosts(sortTimelinePosts(stateBag.data.posts || []));
+  const posts = filteredPosts.slice(0, stateBag.feedLimit);
   const actor = currentActor();
   const canPost = Boolean(actor) && !isPreviewMode();
   els.viewRoot.innerHTML = `
@@ -746,7 +830,10 @@ function renderFeed() {
         </div>
       </section>
       <section class="filter-strip" aria-label="时间线筛选">
-        <input id="feed-search" value="${escapeAttr(stateBag.feedSearch)}" placeholder="搜索帖子 / 作者 / @handle">
+        <div class="feed-search-row">
+          <input id="feed-search" value="${escapeAttr(stateBag.feedSearchDraft)}" placeholder="搜索帖子 / 作者 / @handle">
+          <button class="secondary-button compact-action" type="button" data-action="apply-feed-search">搜索</button>
+        </div>
         <div class="segmented-controls">
           ${feedFilterButtons()}
         </div>
@@ -755,9 +842,15 @@ function renderFeed() {
       </section>
       <section class="post-list" aria-label="SNS 时间线">
         ${posts.map(renderPost).join("") || `<div class="panel empty-panel">时间线还是空的。</div>`}
+        ${filteredPosts.length > posts.length ? `<button class="secondary-button load-more-button" type="button" data-action="load-more-feed">显示更多帖子（${filteredPosts.length - posts.length}）</button>` : ""}
       </section>
     </div>
   `;
+}
+
+function loadMoreFeed() {
+  stateBag.feedLimit += 30;
+  renderFeed();
 }
 
 function feedFilterButtons() {
@@ -832,7 +925,7 @@ function filteredFeedPosts(posts) {
   const actorId = effectiveActorId();
   return posts.filter((post) => {
     const author = getActor(post.authorId);
-    if (stateBag.feedFilter === "mine" && post.authorId !== actorId) return false;
+    if (stateBag.feedFilter === "mine" && post.authorId !== actorId && post.viewerOwnsPost !== true) return false;
     if (stateBag.feedFilter === "anonymous" && post.isAnonymous !== true) return false;
     if (stateBag.feedFilter === "images" && post.attachment?.type !== "image") return false;
     if (stateBag.feedHashtag && !postMatchesHashtag(post, stateBag.feedHashtag)) return false;
@@ -900,6 +993,8 @@ function renderPost(post) {
   ].filter(Boolean).join(" · ");
   const replies = post.replies || [];
   const replyOpen = !isPreviewMode() && stateBag.openReplyPostId === post.id && !stateBag.openReplyParentId;
+  const viewerHasLiked = post.viewerHasLiked === true || (post.likedBy || []).includes(effectiveActorId());
+  const canLike = Boolean(currentActor()) && !isPreviewMode();
   const admin = isGmAdminMode() ? `
     <div class="admin-box">
       <div class="admin-row">
@@ -935,7 +1030,7 @@ function renderPost(post) {
       <div class="post-content">${formatText(post.content, { hashtags: true })}</div>
       ${post.attachment?.type === "image" ? renderImageAttachment(post.attachment, "post-image") : ""}
       <div class="post-actions">
-        <button class="metric-button" type="button" data-action="like-post" data-post-id="${post.id}" ${isPreviewMode() ? "disabled" : ""}>喜欢 ${post.metrics.likes}</button>
+        <button class="metric-button ${viewerHasLiked ? "active" : ""}" type="button" data-action="like-post" data-post-id="${post.id}" ${canLike ? "" : "disabled"}>${viewerHasLiked ? "取消喜欢" : "喜欢"} ${post.metrics.likes}</button>
         <button class="metric-button" type="button" data-action="toggle-reply-composer" data-post-id="${post.id}" ${isPreviewMode() ? "disabled" : ""}>${replyOpen ? "收起回复" : `回复${replies.length ? ` ${replies.length}` : ""}`}</button>
         <span>转发 ${post.metrics.reposts}</span>
         <span>浏览 ${post.metrics.views}</span>
@@ -1055,7 +1150,10 @@ function renderPlayerChatTools() {
 function renderChats() {
   const chats = visibleChats();
   const active = chats.find((chat) => chat.id === stateBag.activeChatId);
-  const messages = active ? stateBag.data.messages.filter((message) => message.chatId === active.id).sort((a, b) => String(a.createdAt).localeCompare(String(b.createdAt))) : [];
+  const allMessages = active ? (indexedMessages().byChat.get(active.id) || []) : [];
+  const messageLimit = active ? (stateBag.chatMessageLimits[active.id] || 100) : 100;
+  const hiddenMessageCount = Math.max(0, allMessages.length - messageLimit);
+  const messages = hiddenMessageCount ? allMessages.slice(-messageLimit) : allMessages;
   const roomChats = filteredAndSortedChats(chats);
   const canSendMessage = Boolean(active && currentActor()) && !isPreviewMode();
   const previousBox = document.getElementById("messages");
@@ -1072,7 +1170,7 @@ function renderChats() {
   }
 
   els.viewRoot.innerHTML = `
-    <div class="chat-layout ${stateBag.memberDrawerChatId === active?.id ? "with-drawer" : ""}">
+    <div class="chat-layout ${stateBag.memberDrawerChatId === active?.id ? "with-drawer" : ""} ${searchCollapsed ? "search-collapsed" : ""}">
       <aside class="room-list">
         ${renderPlayerChatTools()}
         <div class="chat-search-panel ${searchCollapsed ? "collapsed" : "expanded"}">
@@ -1118,6 +1216,7 @@ function renderChats() {
           </div>
         </header>
         <div class="messages" id="messages">
+          ${hiddenMessageCount ? `<button class="ghost-button load-older-messages" type="button" data-action="load-older-messages" data-chat-id="${escapeAttr(active.id)}">显示更早的消息（${hiddenMessageCount}）</button>` : ""}
           ${messages.map(renderMessage).join("") || `<div class="hint">这里还没有消息。</div>`}
         </div>
         ${active && stateBag.chatNewPromptId === active.id ? `<button class="jump-latest-button" type="button" data-action="jump-latest">有新消息，跳到最新</button>` : ""}
@@ -1143,7 +1242,11 @@ function renderChats() {
 
   const messageBox = document.getElementById("messages");
   if (messageBox && active) {
-    if (stateBag.chatNewPromptId === active.id && previousChatId === active.id) {
+    const scrollRestore = stateBag.chatScrollRestore?.chatId === active.id ? stateBag.chatScrollRestore : null;
+    if (scrollRestore) {
+      messageBox.scrollTop = Math.max(0, messageBox.scrollHeight - scrollRestore.scrollHeight + scrollRestore.scrollTop);
+      stateBag.chatScrollRestore = null;
+    } else if (stateBag.chatNewPromptId === active.id && previousChatId === active.id) {
       messageBox.scrollTop = previousScrollTop;
     } else {
       messageBox.scrollTop = messageBox.scrollHeight;
@@ -1164,6 +1267,18 @@ function renderChats() {
   }
   stateBag.renderedChatId = active?.id || "";
   stateBag.renderedLatestMessageId = latestMessageId;
+}
+
+function loadOlderMessages(chatId) {
+  if (!chatId) return;
+  const box = document.getElementById("messages");
+  stateBag.chatScrollRestore = {
+    chatId,
+    scrollHeight: box?.scrollHeight || 0,
+    scrollTop: box?.scrollTop || 0
+  };
+  stateBag.chatMessageLimits[chatId] = (stateBag.chatMessageLimits[chatId] || 100) + 100;
+  renderChats();
 }
 
 function renderChatMemberRequestPanel(chat) {
@@ -1242,7 +1357,7 @@ function renderMessage(message) {
   const displayName = isAnonymous
     ? (isGmAdminMode() && author ? `匿名（${author.name}）` : "匿名")
     : (author?.name || "未知");
-  const mine = !isAnonymous && author?.id === effectiveActorId();
+  const mine = message.viewerOwnsMessage === true || (!isAnonymous && author?.id === effectiveActorId());
   const hasImage = message.attachment?.type === "image";
   const hasText = Boolean(String(message.content || "").trim());
   return `
@@ -2113,6 +2228,7 @@ function renderGm() {
   }
 
   const chars = stateBag.data.characters.filter((item) => item.active !== false);
+  const deletableRosterChars = chars.filter((item) => item.type !== "account");
   const rosterTags = [...new Set(chars.flatMap((character) => characterTags(character)))]
     .sort((a, b) => a.localeCompare(b, "zh-CN"));
   if (stateBag.rosterTag && !rosterTags.includes(stateBag.rosterTag)) {
@@ -2144,6 +2260,14 @@ function renderGm() {
             <button class="secondary-button export-link" type="button" data-action="export-markdown">导出完整 Markdown</button>
             <button class="secondary-button export-link" type="button" data-action="export-gm-chats">导出聊天 Markdown</button>
           </div>
+          <div class="backup-controls">
+            <button class="secondary-button" type="button" data-action="export-gm-backup">下载可恢复完整备份</button>
+            <label class="file-picker compact-file-picker">选择备份
+              <input id="gm-backup-file" type="file" accept="application/json,.json">
+            </label>
+            <button class="danger-button" type="button" data-action="restore-gm-backup">恢复备份</button>
+          </div>
+          <div class="hint">完整备份包含账号认证资料与图片，请妥善保管。</div>
         </div>
       </section>
 
@@ -2259,10 +2383,13 @@ function renderGm() {
             <div class="section-title">角色名册</div>
             <div class="hint">${rosterChars.length} / ${chars.length} 个 active 角色</div>
           </div>
-          <button class="danger-button compact-action" type="button" data-action="delete-all-characters" ${chars.length ? "" : "disabled"}>删除全部角色</button>
+          <button class="danger-button compact-action" type="button" data-action="delete-all-characters" ${deletableRosterChars.length ? "" : "disabled"}>删除全部非账号角色</button>
         </div>
         <div class="roster-tools">
-          <input id="roster-search" value="${escapeAttr(stateBag.rosterSearch)}" placeholder="搜索角色 / @handle / 标签 / 登录名">
+          <div class="roster-search-row">
+            <input id="roster-search" value="${escapeAttr(stateBag.rosterSearchDraft)}" placeholder="搜索角色 / @handle / 标签 / 登录名">
+            <button class="secondary-button compact-action" type="button" data-action="apply-roster-search">搜索</button>
+          </div>
           <div class="tag-filter-row">
             <button class="segment-button ${stateBag.rosterTag ? "" : "active"}" type="button" data-action="set-roster-tag" data-tag="">全部标签</button>
             ${rosterTags.map((tag) => `
@@ -2294,7 +2421,9 @@ function renderGm() {
                 <div class="roster-control-row">
                   <input id="character-tags-${escapeAttr(character.id)}" value="${escapeAttr(characterTagInputValue(character))}" placeholder="标签，用逗号分隔">
                   <button class="secondary-button compact-action" type="button" data-action="save-character-tags" data-character-id="${escapeAttr(character.id)}">保存标签</button>
-                  <button class="danger-button compact-action" type="button" data-action="delete-character" data-character-id="${escapeAttr(character.id)}">删除</button>
+                  ${character.type === "account"
+                    ? `<span class="hint">登录账号请在账号管理中删除</span>`
+                    : `<button class="danger-button compact-action" type="button" data-action="delete-character" data-character-id="${escapeAttr(character.id)}">删除</button>`}
                 </div>
                 <div class="avatar-editor">
                   <label class="file-picker compact-file-picker">头像
@@ -2338,7 +2467,11 @@ async function publishPost() {
 }
 
 async function likePost(postId) {
-  await api(`/api/feed/posts/${encodeURIComponent(postId)}/like`, { method: "POST" });
+  if (!currentActor()) return showNotice("请先创建或选择玩家账号。");
+  await api(`/api/feed/posts/${encodeURIComponent(postId)}/like`, {
+    method: "POST",
+    body: { actorId: stateBag.actorId }
+  });
   await refresh(true);
 }
 
@@ -2352,6 +2485,7 @@ function toggleReplyComposer(postId, parentReplyId = "") {
 
 function setFeedFilter(filter) {
   stateBag.feedFilter = normalizeFeedFilter(filter);
+  stateBag.feedLimit = 30;
   localStorage.setItem("kokubayashi.feedFilter", stateBag.feedFilter);
   renderFeed();
 }
@@ -2362,6 +2496,7 @@ function normalizeFeedFilter(filter) {
 
 function setFeedHashtag(hashtag) {
   stateBag.feedHashtag = normalizeHashtag(hashtag);
+  stateBag.feedLimit = 30;
   if (stateBag.feedHashtag) {
     localStorage.setItem("kokubayashi.feedHashtag", stateBag.feedHashtag);
   } else {
@@ -2515,27 +2650,46 @@ async function unlockGm() {
   try {
     await api("/api/gm/check", { method: "POST", admin: true });
     stateBag.gmUnlocked = true;
-    localStorage.setItem("kokubayashi.gmPin", stateBag.gmPin);
-    localStorage.setItem("kokubayashi.gmUnlocked", "true");
+    sessionStorage.setItem("kokubayashi.gmPin", stateBag.gmPin);
+    sessionStorage.setItem("kokubayashi.gmUnlocked", "true");
     showNotice("GM 后台已解锁。");
     await refresh(true);
   } catch {
     stateBag.gmUnlocked = false;
-    localStorage.setItem("kokubayashi.gmUnlocked", "false");
+    sessionStorage.setItem("kokubayashi.gmUnlocked", "false");
     showNotice("GM PIN 不正确。");
   }
 }
 
-function lockGm() {
+async function lockGm() {
   stateBag.gmUnlocked = false;
+  stateBag.gmPin = "";
   stateBag.previewActorId = "";
   stateBag.gmAccountView = false;
-  localStorage.setItem("kokubayashi.gmUnlocked", "false");
+  stateBag.data = null;
+  messageIndexCache = { source: null, byChat: new Map(), latestByChat: new Map() };
+  sessionStorage.removeItem("kokubayashi.gmPin");
+  sessionStorage.removeItem("kokubayashi.gmUnlocked");
   localStorage.removeItem("kokubayashi.gmAccountView");
-  render();
+  els.viewRoot.innerHTML = `<div class="panel empty-panel">正在退出 GM 视角...</div>`;
+  els.quickbar.replaceChildren();
+  els.quickbar.hidden = true;
+  els.accountTools.replaceChildren();
+  els.actorPreview.replaceChildren();
+  els.clockLine.textContent = "";
+  document.getElementById("gm-view-float")?.remove();
+  await refresh(true);
 }
 
 async function downloadGmMarkdown(path, filenamePrefix) {
+  return downloadGmFile(path, filenamePrefix, "md", "Markdown 导出已开始下载。");
+}
+
+async function downloadGmBackup() {
+  return downloadGmFile("/api/gm/backup.json", "kunibayashi-backup", "json", "完整备份已开始下载。");
+}
+
+async function downloadGmFile(path, filenamePrefix, extension, notice) {
   if (!stateBag.gmPin) return showNotice("请先解锁 GM。");
   const response = await fetch(path, {
     headers: { "X-GM-PIN": stateBag.gmPin }
@@ -2548,12 +2702,36 @@ async function downloadGmMarkdown(path, filenamePrefix) {
   const objectUrl = URL.createObjectURL(blob);
   const link = document.createElement("a");
   link.href = objectUrl;
-  link.download = `${filenamePrefix}-${new Date().toISOString().slice(0, 10)}.md`;
+  link.download = `${filenamePrefix}-${new Date().toISOString().slice(0, 10)}.${extension}`;
   document.body.appendChild(link);
   link.click();
   link.remove();
   setTimeout(() => URL.revokeObjectURL(objectUrl), 0);
-  showNotice("Markdown 导出已开始下载。");
+  showNotice(notice);
+}
+
+async function restoreGmBackup() {
+  if (!isGmAdminMode()) return showNotice("请先切回 GM 视角。");
+  const file = document.getElementById("gm-backup-file")?.files?.[0];
+  if (!file) return showNotice("请选择国林 SNS 备份 JSON。");
+  const confirmation = window.prompt("恢复会替换当前 SNS 数据。系统会先自动备份当前状态。请输入 RESTORE 继续：");
+  if (confirmation !== "RESTORE") return showNotice("已取消恢复。");
+  let backup;
+  try {
+    backup = JSON.parse(await file.text());
+  } catch {
+    return showNotice("备份文件不是有效的 JSON。");
+  }
+  stateBag.data = await api("/api/gm/restore", {
+    method: "POST",
+    admin: true,
+    body: { backup, confirm: "RESTORE_KUNIBAYASHI_BACKUP" }
+  });
+  stateBag.profileId = "";
+  ensureActor();
+  ensureChat();
+  showNotice("备份已恢复。");
+  render();
 }
 
 async function saveSettings() {
@@ -2655,7 +2833,7 @@ async function toggleGmAccountView() {
   await refresh(true);
 }
 
-function startPlayerPreview() {
+async function startPlayerPreview() {
   if (!stateBag.gmUnlocked) return showNotice("请先解锁 GM。");
   const actorId = document.getElementById("quick-preview-select")?.value || stateBag.previewPickActorId;
   const actor = getActor(actorId);
@@ -2668,14 +2846,14 @@ function startPlayerPreview() {
     localStorage.setItem("kokubayashi.tab", stateBag.tab);
   }
   showNotice(`正在以 ${actor.name} 的玩家视角预览。`);
-  render();
+  await refresh(true);
 }
 
-function stopPlayerPreview(show = true) {
+async function stopPlayerPreview(show = true) {
   stateBag.previewActorId = "";
   stateBag.profileId = "";
   if (show) showNotice("已退出玩家视角预览。");
-  render();
+  await refresh(true);
 }
 
 async function saveCurrentCalendarDay() {
@@ -2962,7 +3140,7 @@ async function deleteAllPlayerAccounts() {
   const result = await api("/api/player-accounts", {
     method: "DELETE",
     admin: true,
-    body: { all: true }
+    body: { all: true, confirm: "DELETE_ALL_PLAYER_ACCOUNTS" }
   });
   stateBag.data = result.state;
   stateBag.lastGmCreatedAccount = null;
@@ -3034,12 +3212,13 @@ async function deleteCharacter(characterId) {
 }
 
 async function deleteAllCharacters() {
-  const chars = (stateBag.data?.characters || []).filter((character) => character.active !== false);
+  const chars = (stateBag.data?.characters || []).filter((character) => character.active !== false && character.type !== "account");
   if (!chars.length) return showNotice("没有可删除的角色。");
-  if (!window.confirm(`删除全部 ${chars.length} 个 active 角色？历史消息会保留，GM 撤销可以恢复。`)) return;
+  if (!window.confirm(`删除全部 ${chars.length} 个非账号角色？玩家登录账号不会受到影响；操作前会自动备份。`)) return;
   const result = await api("/api/characters", {
     method: "DELETE",
-    admin: true
+    admin: true,
+    body: { confirm: "DELETE_NON_ACCOUNT_CHARACTERS" }
   });
   stateBag.data = result.state;
   stateBag.actorId = "";
@@ -3092,7 +3271,7 @@ async function loginPlayerAccount() {
   render();
 }
 
-function switchAccount(characterId) {
+async function switchAccount(characterId) {
   if (!characterId) return;
   const account = getActor(characterId);
   if (!account || !stateBag.accountTokens[characterId]) return showNotice("这个账号需要重新登录。");
@@ -3100,13 +3279,21 @@ function switchAccount(characterId) {
   stateBag.profileId = "";
   localStorage.setItem("kokubayashi.actorId", stateBag.actorId);
   showNotice(`已切换到 ${account.name}。`);
-  render();
+  await refresh(true);
 }
 
-function logoutAccount(characterId = stateBag.actorId) {
+async function logoutAccount(characterId = stateBag.actorId) {
   const accountId = characterId || stateBag.actorId;
   if (!accountId) return;
   const account = getActor(accountId);
+  const accountToken = stateBag.accountTokens[accountId];
+  if (accountToken) {
+    await api("/api/player-accounts/logout", {
+      method: "POST",
+      accountToken,
+      body: { accountId }
+    });
+  }
   delete stateBag.accountTokens[accountId];
   saveAccountTokens();
   if (stateBag.actorId === accountId) {
@@ -3115,7 +3302,7 @@ function logoutAccount(characterId = stateBag.actorId) {
     localStorage.removeItem("kokubayashi.actorId");
   }
   showNotice(account ? `已退出 ${account.name}。` : "已退出账号。");
-  render();
+  await refresh(true);
 }
 
 async function updateAvatar() {
@@ -3379,11 +3566,16 @@ async function createPlayerPrivateChat() {
 async function api(path, options = {}) {
   const headers = { "Content-Type": "application/json" };
   const method = String(options.method || "GET").toUpperCase();
-  const useGmAuth = (isGmAdminMode() || options.admin || (isGmAccountView() && method !== "GET")) && stateBag.gmPin;
+  const playerViewAsGm = stateBag.gmUnlocked && (isGmAccountView() || isPreviewMode()) && Boolean(effectiveActorId()) && !options.admin;
+  const useGmAuth = (isGmAdminMode() || options.admin || playerViewAsGm) && stateBag.gmPin;
   if (useGmAuth) headers["X-GM-PIN"] = stateBag.gmPin;
-  if (isGmAccountView() && !options.admin) headers["X-View-Mode"] = "account";
-  if (!stateBag.gmUnlocked && stateBag.actorId && stateBag.accountTokens[stateBag.actorId]) {
-    headers["X-Account-Token"] = stateBag.accountTokens[stateBag.actorId];
+  if (playerViewAsGm) {
+    headers["X-View-Mode"] = "account";
+    headers["X-View-Actor"] = effectiveActorId();
+  }
+  const accountToken = options.accountToken || (!stateBag.gmUnlocked && stateBag.actorId ? stateBag.accountTokens[stateBag.actorId] : "");
+  if (accountToken) {
+    headers["X-Account-Token"] = accountToken;
   }
   const response = await fetch(path, {
     method,
@@ -3405,7 +3597,7 @@ function availableActors() {
   }
   if (stateBag.gmUnlocked) return chars;
   const ownedIds = new Set(Object.keys(stateBag.accountTokens));
-  return chars.filter((item) => item.type === "account" && ownedIds.has(item.id));
+  return chars.filter((item) => ownedIds.has(item.id));
 }
 
 function visibleChats() {
@@ -3555,9 +3747,7 @@ function isChatPinned(chatId) {
 
 function latestMessageForChat(chat) {
   if (!chat) return null;
-  return [...(stateBag.data?.messages || [])]
-    .filter((message) => message.chatId === chat.id)
-    .sort((a, b) => String(b.createdAt).localeCompare(String(a.createdAt)))[0] || null;
+  return indexedMessages().latestByChat.get(chat.id) || null;
 }
 
 function markChatRead(chatId, createdAt) {
@@ -3581,7 +3771,7 @@ function canDeleteChat(chat) {
 function canDeleteReply(reply) {
   if (!reply) return false;
   if (isGmAdminMode()) return true;
-  return reply.authorId === stateBag.actorId;
+  return reply.viewerOwnsReply === true || reply.authorId === stateBag.actorId;
 }
 
 function contactCandidates() {

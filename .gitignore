@@ -1,4 +1,8 @@
-data/state.json
+data/
+public/avatars/
+.env
+.env.*
+!.env.example
 server.out.log
 server.err.log
 .tmp-*/

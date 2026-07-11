@@ -2,26 +2,65 @@ const http = require("http");
 const fs = require("fs");
 const path = require("path");
 const crypto = require("crypto");
+const zlib = require("zlib");
 const { AsyncLocalStorage } = require("async_hooks");
 
 const ROOT = __dirname;
 const PUBLIC_DIR = path.join(ROOT, "public");
 const DATA_DIR = process.env.DATA_DIR ? path.resolve(process.env.DATA_DIR) : path.join(ROOT, "data");
 const STATE_FILE = path.join(DATA_DIR, "state.json");
+const MEDIA_DIR = path.join(DATA_DIR, "media");
+const BACKUP_DIR = path.join(DATA_DIR, "backups");
 const PORT = Number(process.env.PORT || 4173);
 const HOST = process.env.HOST || "0.0.0.0";
 const GM_PIN = process.env.GM_PIN || "gm";
 const MAX_JSON_BODY_BYTES = 24 * 1024 * 1024;
+const MAX_BACKUP_BODY_BYTES = 96 * 1024 * 1024;
 const MAX_AVATAR_DATA_URL_LENGTH = 2500000;
 const MAX_EMOJI_DATA_URL_LENGTH = 1000000;
 const MAX_POST_IMAGE_DATA_URL_LENGTH = 9000000;
 const MAX_CHAT_IMAGE_DATA_URL_LENGTH = 9000000;
 const MAX_POST_CONTENT_LENGTH = 2000;
 const MAX_REPLY_CONTENT_LENGTH = 1000;
+const MAX_MESSAGE_CONTENT_LENGTH = 2000;
+const MAX_BULLETIN_TITLE_LENGTH = 100;
+const MAX_BULLETIN_CONTENT_LENGTH = 1200;
+const MAX_EVENT_TITLE_LENGTH = 100;
+const MAX_EVENT_DETAIL_LENGTH = 900;
+const MAX_CHAT_NAME_LENGTH = 80;
+const MAX_SCHEDULE_TEXT_LENGTH = 16000;
+const MAX_CALENDAR_LABEL_LENGTH = 80;
+const MAX_CALENDAR_NOTE_LENGTH = 1200;
+const MAX_CHARACTER_NOTE_LENGTH = 1200;
+const MAX_GAME_TIME_LENGTH = 120;
+const MAX_SITE_NAME_LENGTH = 80;
+const MAX_EMOJIS_PER_ACCOUNT = 25;
+const MAX_CUSTOM_EMOJIS = 200;
 const MAX_ACCOUNT_IMPORT_COUNT = 120;
 const MAX_CHARACTER_IMPORT_COUNT = 200;
+const ACCOUNT_SESSION_TTL_MS = 90 * 24 * 60 * 60 * 1000;
+const MAX_ACCOUNT_SESSIONS = 8;
+const MAX_ROLLING_BACKUPS = 12;
+const PERIODIC_BACKUP_INTERVAL_MS = 60 * 60 * 1000;
+const PATCHABLE_SECTIONS = [
+  "settings",
+  "characters",
+  "chats",
+  "calendarDays",
+  "posts",
+  "messages",
+  "bulletins",
+  "emojis",
+  "relationships",
+  "chatMemberRequests",
+  "auditLog",
+  "undoStack"
+];
 
 let cachedState = null;
+let serverReady = false;
+let lastPeriodicBackupAt = 0;
+const rateLimitBuckets = new Map();
 const requestContext = new AsyncLocalStorage();
 
 const MIME = {
@@ -33,7 +72,8 @@ const MIME = {
   ".png": "image/png",
   ".jpg": "image/jpeg",
   ".jpeg": "image/jpeg",
-  ".webp": "image/webp"
+  ".webp": "image/webp",
+  ".gif": "image/gif"
 };
 
 const PALETTE = [
@@ -88,14 +128,136 @@ function readState() {
   return cachedState;
 }
 
-function writeState(state) {
+function writeState(state, changedSections = PATCHABLE_SECTIONS) {
   fs.mkdirSync(DATA_DIR, { recursive: true });
+  maybeCreatePeriodicBackup();
   cachedState = normalizeState(state);
   state = cachedState;
-  state.updatedAt = new Date().toISOString();
+  const previousUpdatedAt = Date.parse(state.updatedAt || "");
+  const nowMs = Number.isFinite(previousUpdatedAt)
+    ? Math.max(Date.now(), previousUpdatedAt + 1)
+    : Date.now();
+  const now = new Date(nowMs).toISOString();
+  state.updatedAt = now;
+  state.sectionVersions ||= {};
+  const sections = unique(Array.isArray(changedSections) ? changedSections : PATCHABLE_SECTIONS)
+    .filter((section) => PATCHABLE_SECTIONS.includes(section));
+  if (!Object.keys(state.sectionVersions).length) {
+    for (const section of PATCHABLE_SECTIONS) state.sectionVersions[section] = now;
+  }
+  for (const section of sections) state.sectionVersions[section] = now;
   const tempFile = `${STATE_FILE}.tmp`;
   fs.writeFileSync(tempFile, JSON.stringify(state, null, 2), "utf8");
   fs.renameSync(tempFile, STATE_FILE);
+}
+
+function backupStateFile(label = "automatic") {
+  if (!fs.existsSync(STATE_FILE)) return "";
+  fs.mkdirSync(BACKUP_DIR, { recursive: true });
+  const safeLabel = String(label || "backup").replace(/[^a-z0-9_-]+/gi, "-").replace(/^-+|-+$/g, "").slice(0, 48) || "backup";
+  const stamp = new Date().toISOString().replace(/[:.]/g, "-");
+  const backupFile = path.join(BACKUP_DIR, `state-${stamp}-${safeLabel}.json`);
+  fs.copyFileSync(STATE_FILE, backupFile);
+  pruneRollingBackups();
+  return backupFile;
+}
+
+function pruneRollingBackups() {
+  if (!fs.existsSync(BACKUP_DIR)) return;
+  const files = fs.readdirSync(BACKUP_DIR)
+    .filter((file) => /^state-.*\.json$/i.test(file))
+    .map((file) => ({ file, path: path.join(BACKUP_DIR, file), time: fs.statSync(path.join(BACKUP_DIR, file)).mtimeMs }))
+    .sort((a, b) => b.time - a.time);
+  for (const entry of files.slice(MAX_ROLLING_BACKUPS)) fs.unlinkSync(entry.path);
+}
+
+function maybeCreatePeriodicBackup() {
+  const now = Date.now();
+  if (!fs.existsSync(STATE_FILE) || now - lastPeriodicBackupAt < PERIODIC_BACKUP_INTERVAL_MS) return;
+  backupStateFile("hourly");
+  lastPeriodicBackupAt = now;
+}
+
+function migrateEmbeddedMedia(state) {
+  let changed = false;
+  const walk = (value, parent, key) => {
+    if (typeof value === "string" && value.startsWith("data:image/")) {
+      try {
+        parent[key] = persistImageDataUrl(value, Infinity, "Stored image");
+        changed = parent[key] !== value || changed;
+      } catch (error) {
+        console.warn(`Stored image could not be migrated: ${error.message}`);
+      }
+      return;
+    }
+    if (!value || typeof value !== "object") return;
+    if (Array.isArray(value)) {
+      value.forEach((item, index) => walk(item, value, index));
+      return;
+    }
+    for (const [childKey, childValue] of Object.entries(value)) walk(childValue, value, childKey);
+  };
+  walk(state, { state }, "state");
+  return changed;
+}
+
+function mediaDataUrl(mediaUrl) {
+  const match = String(mediaUrl || "").match(/^\/media\/([a-z0-9_.-]+)$/i);
+  if (!match) return mediaUrl;
+  const filePath = path.resolve(MEDIA_DIR, match[1]);
+  if (!filePath.startsWith(`${path.resolve(MEDIA_DIR)}${path.sep}`) || !fs.existsSync(filePath)) return mediaUrl;
+  const extension = path.extname(filePath).toLowerCase();
+  const mimeType = extension === ".jpg" || extension === ".jpeg"
+    ? "image/jpeg"
+    : extension === ".png"
+      ? "image/png"
+      : extension === ".webp"
+        ? "image/webp"
+        : extension === ".gif"
+          ? "image/gif"
+          : "";
+  if (!mimeType) return mediaUrl;
+  return `data:${mimeType};base64,${fs.readFileSync(filePath).toString("base64")}`;
+}
+
+function hydrateMediaForBackup(value) {
+  if (typeof value === "string") return mediaDataUrl(value);
+  if (Array.isArray(value)) return value.map(hydrateMediaForBackup);
+  if (!value || typeof value !== "object") return value;
+  const result = {};
+  for (const [key, child] of Object.entries(value)) result[key] = hydrateMediaForBackup(child);
+  return result;
+}
+
+function exportBackupBundle(state) {
+  const backupState = JSON.parse(JSON.stringify(state));
+  backupState.undoStack = (state.undoStack || []).map((entry) => ({
+    ...entry,
+    snapshot: decompressUndoSnapshot(entry),
+    snapshotCompressed: undefined
+  }));
+  return {
+    format: "kunibayashi-backup-v1",
+    exportedAt: new Date().toISOString(),
+    state: hydrateMediaForBackup(backupState)
+  };
+}
+
+function restoreBackupBundle(bundle) {
+  if (!bundle || bundle.format !== "kunibayashi-backup-v1" || !bundle.state || typeof bundle.state !== "object") {
+    const error = new Error("Backup file format is invalid.");
+    error.statusCode = 400;
+    throw error;
+  }
+  const restored = JSON.parse(JSON.stringify(bundle.state));
+  if (!Array.isArray(restored.characters) || !Array.isArray(restored.chats) || !Array.isArray(restored.calendarDays)) {
+    const error = new Error("Backup is missing required state collections.");
+    error.statusCode = 400;
+    throw error;
+  }
+  migrateEmbeddedMedia(restored);
+  delete restored.__adminView;
+  return normalizeState(restored);
 }
 
 function createInitialState() {
@@ -192,8 +354,9 @@ function createInitialState() {
 }
 
 function normalizeState(state) {
-  state.version = Math.max(Number(state.version || 1), 7);
+  state.version = Math.max(Number(state.version || 1), 8);
   state.updatedAt ||= new Date().toISOString();
+  state.sectionVersions ||= {};
   state.settings ||= {};
   state.settings.gameTime ||= "开学首日 18:12";
   state.settings.schoolDay ||= "周一";
@@ -217,7 +380,18 @@ function normalizeState(state) {
     character.avatarText ||= avatarText(character.name);
     character.handle = `@${String(character.handle || makeHandle(character.name)).replace(/^@/, "")}`;
     character.type ||= "npc";
-    if (character.type === "account") character.username = normalizeUsername(character.username || character.handle || character.name, character.handle || character.name);
+    if (character.type === "account") {
+      character.username = normalizeUsername(character.username || character.handle || character.name, character.handle || character.name);
+      character.auth ||= {};
+      character.auth.sessions = normalizeAccountSessions(character.auth.sessions);
+      if (character.accessToken) {
+        const tokenHash = hashSessionToken(character.accessToken);
+        if (!character.auth.sessions.some((session) => session.tokenHash === tokenHash)) {
+          character.auth.sessions.unshift(makeStoredSession(character.accessToken, character.createdAt));
+        }
+      }
+      delete character.accessToken;
+    }
     character.tags = normalizeTags(character.tags);
     character.active = character.active !== false;
   }
@@ -263,6 +437,7 @@ function normalizeState(state) {
     post.dayId = inferTimelineDayId(state, post);
     post.timelineSortKey = buildTimelineSortKey(state, post.dayId, post.gameTime);
     post.metrics = normalizeMetrics(post.metrics);
+    post.likedBy = unique(Array.isArray(post.likedBy) ? post.likedBy.map(String) : []);
     post.replies ||= [];
     post.isAnonymous = post.isAnonymous === true;
     for (const reply of post.replies) {
@@ -494,8 +669,20 @@ function advanceGameTimeString(value, minutes) {
 
 function advanceTimelineGameTime(state) {
   const minutes = Math.floor(Math.random() * 5) + 1;
+  const previousMinutes = parseGameTimeMinutes(state.settings.gameTime);
   state.settings.gameTime = advanceGameTimeString(state.settings.gameTime, minutes);
-  return minutes;
+  let dayChanged = false;
+  if (previousMinutes !== null && previousMinutes + minutes >= 1440) {
+    const days = state.calendarDays || [];
+    const currentIndex = days.findIndex((day) => day.id === state.settings.currentDayId);
+    const nextDay = currentIndex >= 0 ? days[currentIndex + 1] : null;
+    if (nextDay) {
+      state.settings.currentDayId = nextDay.id;
+      state.settings.schoolDay = calendarDayDisplay(nextDay);
+      dayChanged = true;
+    }
+  }
+  return { minutes, dayChanged };
 }
 
 function findPostReply(post, replyId) {
@@ -700,14 +887,19 @@ function normalizeAuditLog(entries) {
 
 function normalizeUndoStack(entries) {
   if (!Array.isArray(entries)) return [];
-  return entries.map((entry) => ({
-    id: entry.id || id("undo"),
-    action: String(entry.action || "update").trim(),
-    label: String(entry.label || "GM 更新").trim(),
-    keys: Array.isArray(entry.keys) ? entry.keys.map(String) : [],
-    snapshot: entry.snapshot && typeof entry.snapshot === "object" ? entry.snapshot : {},
-    createdAt: entry.createdAt || new Date().toISOString()
-  })).filter((entry) => entry.keys.length).slice(0, 12);
+  return entries.map((entry) => {
+    const snapshotCompressed = typeof entry.snapshotCompressed === "string" && entry.snapshotCompressed
+      ? entry.snapshotCompressed
+      : compressUndoSnapshot(entry.snapshot && typeof entry.snapshot === "object" ? entry.snapshot : {});
+    return {
+      id: entry.id || id("undo"),
+      action: String(entry.action || "update").trim(),
+      label: String(entry.label || "GM 更新").trim(),
+      keys: Array.isArray(entry.keys) ? entry.keys.map(String) : [],
+      snapshotCompressed,
+      createdAt: entry.createdAt || new Date().toISOString()
+    };
+  }).filter((entry) => entry.keys.length).slice(0, 12);
 }
 
 function readSeedState() {
@@ -855,93 +1047,213 @@ function unique(items) {
   return Array.from(new Set(items.filter(Boolean)));
 }
 
-function sendJson(res, status, payload) {
+function sendJson(res, status, payload, extraHeaders = {}) {
   const body = JSON.stringify(payload);
-  res.writeHead(status, {
+  sendBody(res, status, body, {
     "Content-Type": "application/json; charset=utf-8",
-    "Content-Length": Buffer.byteLength(body),
-    "Cache-Control": "no-store"
+    "Cache-Control": "no-store",
+    ...extraHeaders
   });
-  res.end(body);
 }
 
-function publicState(state) {
-  const adminView = requestContext.getStore()?.adminView ?? Boolean(state.__adminView);
+function publicState(state, overrides = {}) {
+  const context = requestContext.getStore() || {};
+  const adminView = overrides.adminView ?? context.adminView ?? false;
+  const viewerId = String(overrides.viewerId ?? context.viewerId ?? "");
+  const sanitizedCharacters = (state.characters || []).map(({ accessToken, auth, ...character }) => character);
   const calendarDays = (state.calendarDays || []).map((day) => ({
     ...day,
     events: adminView
       ? (day.events || [])
       : (day.events || []).filter((event) => event.isPublic || event.triggeredAt)
   }));
-  const messages = (state.messages || []).map((message) => (
-    !adminView && message.isAnonymous
-      ? { ...message, authorId: "" }
-      : message
+
+  if (adminView) {
+    return {
+      ...state,
+      characters: sanitizedCharacters,
+      calendarDays,
+      undoStack: (state.undoStack || []).map(({ snapshot, snapshotCompressed, ...entry }) => entry)
+    };
+  }
+
+  const chats = (state.chats || []).filter((chat) => (
+    chat.isPublic === true || (viewerId && (chat.memberIds || []).includes(viewerId))
   ));
-  const posts = (state.posts || []).map((post) => (
-    !adminView && post.isAnonymous
-      ? {
-          ...post,
-          authorId: "",
-          replies: (post.replies || []).map((reply) => (
-            reply.isAnonymous ? { ...reply, authorId: "" } : reply
-          ))
-        }
-      : {
-          ...post,
-          replies: (post.replies || []).map((reply) => (
-            !adminView && reply.isAnonymous ? { ...reply, authorId: "" } : reply
-          ))
-        }
-  ));
+  const visibleChatIds = new Set(chats.map((chat) => chat.id));
+  const messages = (state.messages || [])
+    .filter((message) => visibleChatIds.has(message.chatId))
+    .map((message) => {
+      const viewerOwnsMessage = Boolean(viewerId && message.authorId === viewerId);
+      return message.isAnonymous
+        ? { ...message, authorId: "", viewerOwnsMessage }
+        : { ...message, viewerOwnsMessage };
+    });
+  const posts = (state.posts || []).map((post) => {
+    const viewerOwnsPost = Boolean(viewerId && post.authorId === viewerId);
+    const viewerHasLiked = Boolean(viewerId && (post.likedBy || []).includes(viewerId));
+    const { likedBy, ...safePost } = post;
+    return {
+      ...safePost,
+      authorId: post.isAnonymous ? "" : post.authorId,
+      viewerOwnsPost,
+      viewerHasLiked,
+      replies: (post.replies || []).map((reply) => ({
+        ...reply,
+        authorId: reply.isAnonymous ? "" : reply.authorId,
+        viewerOwnsReply: Boolean(viewerId && reply.authorId === viewerId)
+      }))
+    };
+  });
+  const relationships = viewerId
+    ? (state.relationships || []).filter((relationship) => (
+        relationship.requesterId === viewerId || relationship.targetId === viewerId
+      ))
+    : [];
+  const referencedCharacterIds = new Set([
+    ...posts.map((post) => post.authorId),
+    ...posts.flatMap((post) => (post.replies || []).map((reply) => reply.authorId)),
+    ...messages.map((message) => message.authorId),
+    ...chats.flatMap((chat) => chat.memberIds || [])
+  ].filter(Boolean));
+  const characters = sanitizedCharacters
+    .filter((character) => character.active !== false || referencedCharacterIds.has(character.id))
+    .map(publicCharacterProfile);
+  const sectionVersions = {};
+  for (const section of ["settings", "characters", "chats", "calendarDays", "posts", "messages", "bulletins", "emojis", "relationships"]) {
+    if (state.sectionVersions?.[section]) sectionVersions[section] = state.sectionVersions[section];
+  }
 
   return {
-    ...state,
-    characters: state.characters.map(({ accessToken, auth, ...character }) => character),
+    version: state.version,
+    updatedAt: state.updatedAt,
+    sectionVersions,
+    settings: state.settings,
+    characters,
+    chats,
     calendarDays,
     posts,
     messages,
-    chatMemberRequests: adminView ? (state.chatMemberRequests || []) : [],
-    bulletins: adminView ? state.bulletins : (state.bulletins || []).filter((bulletin) => bulletin.isPublic !== false),
-    auditLog: adminView ? (state.auditLog || []) : [],
-    undoStack: adminView
-      ? (state.undoStack || []).map(({ snapshot, ...entry }) => entry)
-      : []
+    bulletins: (state.bulletins || []).filter((bulletin) => bulletin.isPublic !== false),
+    emojis: (state.emojis || []).map(({ ownerId, ...emoji }) => emoji),
+    relationships,
+    chatMemberRequests: [],
+    auditLog: [],
+    undoStack: []
   };
 }
 
-function sendText(res, status, body, contentType = "text/plain; charset=utf-8") {
-  res.writeHead(status, {
-    "Content-Type": contentType,
-    "Content-Length": Buffer.byteLength(body),
-    "Cache-Control": "no-store"
-  });
-  res.end(body);
+function publicCharacterProfile(character) {
+  return {
+    id: character.id,
+    name: character.name,
+    handle: character.handle,
+    color: character.color,
+    avatarText: character.avatarText,
+    avatarData: character.avatarData,
+    tags: (character.tags || []).filter((tag) => !isImmersionBreakingTag(tag)),
+    active: character.active !== false
+  };
 }
 
-function readBody(req) {
+function isImmersionBreakingTag(tag) {
+  const value = String(tag || "").trim().toLowerCase().replace(/[\s_\-・/／|｜]+/g, "");
+  return ["npc", "pc", "player", "account", "gm", "gm角色", "gm扮演角色", "玩家", "玩家角色", "玩家账号"].includes(value);
+}
+
+function publicStatePatch(state, since, overrides = {}) {
+  const view = publicState(state, overrides);
+  const visibleVersionKeys = new Set(Object.keys(view.sectionVersions || {}));
+  const changedSections = PATCHABLE_SECTIONS.filter((section) => (
+    visibleVersionKeys.has(section) &&
+    Object.prototype.hasOwnProperty.call(view, section) &&
+    String(state.sectionVersions?.[section] || "").localeCompare(String(since || "")) > 0
+  ));
+  if (!changedSections.length) {
+    return { changed: false, updatedAt: state.updatedAt };
+  }
+  const patch = {
+    version: view.version,
+    updatedAt: view.updatedAt,
+    sectionVersions: view.sectionVersions
+  };
+  for (const section of changedSections) patch[section] = view[section];
+  return { changed: true, updatedAt: state.updatedAt, patch };
+}
+
+function sendText(res, status, body, contentType = "text/plain; charset=utf-8", extraHeaders = {}) {
+  sendBody(res, status, body, {
+    "Content-Type": contentType,
+    "Cache-Control": "no-store",
+    ...extraHeaders
+  });
+}
+
+function sendBody(res, status, body, headers = {}) {
+  const source = Buffer.isBuffer(body) ? body : Buffer.from(String(body));
+  const request = requestContext.getStore()?.req;
+  const acceptEncoding = String(request?.headers?.["accept-encoding"] || "");
+  let payload = source;
+  const responseHeaders = {
+    "X-Content-Type-Options": "nosniff",
+    "Referrer-Policy": "same-origin",
+    "Permissions-Policy": "camera=(), microphone=(), geolocation=()",
+    "Content-Security-Policy": "default-src 'self'; img-src 'self' data: blob:; style-src 'self' 'unsafe-inline'; script-src 'self'; connect-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'",
+    ...headers
+  };
+  const compressible = /^(?:text\/|application\/(?:json|javascript))|svg\+xml/i.test(String(responseHeaders["Content-Type"] || ""));
+  if (compressible && source.length >= 1024 && /\bbr\b/i.test(acceptEncoding)) {
+    payload = zlib.brotliCompressSync(source, {
+      params: { [zlib.constants.BROTLI_PARAM_QUALITY]: 4 }
+    });
+    responseHeaders["Content-Encoding"] = "br";
+    responseHeaders.Vary = "Accept-Encoding";
+  } else if (compressible && source.length >= 1024 && /\bgzip\b/i.test(acceptEncoding)) {
+    payload = zlib.gzipSync(source, { level: 4 });
+    responseHeaders["Content-Encoding"] = "gzip";
+    responseHeaders.Vary = "Accept-Encoding";
+  }
+  responseHeaders["Content-Length"] = payload.length;
+  res.writeHead(status, responseHeaders);
+  res.end(payload);
+}
+
+function readBody(req, maxBytes = MAX_JSON_BODY_BYTES) {
   return new Promise((resolve, reject) => {
-    let body = "";
+    const chunks = [];
+    let byteLength = 0;
+    let tooLarge = false;
     req.on("data", (chunk) => {
-      body += chunk;
-      if (Buffer.byteLength(body) > MAX_JSON_BODY_BYTES) {
-        reject(new Error("Request body is too large."));
-        req.destroy();
+      if (tooLarge) return;
+      byteLength += chunk.length;
+      if (byteLength > maxBytes) {
+        tooLarge = true;
+        return;
       }
+      chunks.push(chunk);
     });
     req.on("end", () => {
+      if (tooLarge) {
+        const error = new Error("Request body is too large.");
+        error.statusCode = 413;
+        reject(error);
+        return;
+      }
+      const body = Buffer.concat(chunks).toString("utf8");
       if (!body) return resolve({});
       try {
         resolve(JSON.parse(body));
       } catch (error) {
+        error.statusCode = 400;
         reject(error);
       }
     });
+    req.on("error", reject);
   });
 }
 
 function isAdmin(req) {
-  return req.headers["x-gm-pin"] === GM_PIN;
+  return secureStringEqual(req.headers["x-gm-pin"], GM_PIN);
 }
 
 function requireAdmin(req, res) {
@@ -966,11 +1278,105 @@ function authorizeAuthor(req, res, state, characterId) {
     return null;
   }
   const token = req.headers["x-account-token"];
-  if (!token || token !== author.accessToken) {
+  if (!token || !accountHasSession(author, token)) {
     sendJson(res, 403, { error: "Account token is invalid." });
     return null;
   }
   return author;
+}
+
+function secureStringEqual(first, second) {
+  const left = Buffer.from(String(first || ""));
+  const right = Buffer.from(String(second || ""));
+  if (!left.length || left.length !== right.length) return false;
+  return crypto.timingSafeEqual(left, right);
+}
+
+function hashSessionToken(token) {
+  return crypto.createHash("sha256").update(String(token || "")).digest("hex");
+}
+
+function makeStoredSession(token, createdAt = new Date().toISOString()) {
+  const created = new Date(createdAt);
+  const createdTime = Number.isNaN(created.getTime()) ? Date.now() : created.getTime();
+  return {
+    tokenHash: hashSessionToken(token),
+    createdAt: new Date(createdTime).toISOString(),
+    expiresAt: new Date(createdTime + ACCOUNT_SESSION_TTL_MS).toISOString()
+  };
+}
+
+function normalizeAccountSessions(sessions) {
+  const now = Date.now();
+  return (Array.isArray(sessions) ? sessions : [])
+    .filter((session) => session?.tokenHash && /^[a-f0-9]{64}$/i.test(session.tokenHash))
+    .map((session) => ({
+      tokenHash: String(session.tokenHash).toLowerCase(),
+      createdAt: session.createdAt || new Date().toISOString(),
+      expiresAt: session.expiresAt || new Date(now + ACCOUNT_SESSION_TTL_MS).toISOString()
+    }))
+    .filter((session) => new Date(session.expiresAt).getTime() > now)
+    .slice(0, MAX_ACCOUNT_SESSIONS);
+}
+
+function accountHasSession(account, token) {
+  if (!account || account.type !== "account" || !token) return false;
+  const tokenHash = hashSessionToken(token);
+  return normalizeAccountSessions(account.auth?.sessions).some((session) => secureStringEqual(session.tokenHash, tokenHash));
+}
+
+function accountFromRequest(req, state) {
+  const token = String(req.headers["x-account-token"] || "");
+  if (!token) return null;
+  return (state.characters || []).find((character) => (
+    character.active !== false && character.type === "account" && accountHasSession(character, token)
+  )) || null;
+}
+
+function configureRequestView(req, state) {
+  const context = requestContext.getStore() || {};
+  const forceAccountView = String(req.headers["x-view-mode"] || "").toLowerCase() === "account";
+  const admin = isAdmin(req);
+  context.adminView = admin && !forceAccountView;
+  context.viewerId = "";
+  context.accountSessionInvalid = false;
+  if (admin && forceAccountView) {
+    const requestedViewer = findCharacter(state, String(req.headers["x-view-actor"] || ""));
+    context.viewerId = requestedViewer?.id || "";
+  } else if (!admin) {
+    const accountToken = String(req.headers["x-account-token"] || "");
+    const account = accountFromRequest(req, state);
+    context.viewerId = account?.id || "";
+    context.accountSessionInvalid = Boolean(accountToken && !account);
+  }
+}
+
+function requestIp(req) {
+  const forwarded = String(req.headers["x-forwarded-for"] || "").split(",")[0].trim();
+  return forwarded || req.socket?.remoteAddress || "unknown";
+}
+
+function requireRateLimit(req, res, bucket, limit, windowMs) {
+  const key = `${bucket}:${requestIp(req)}`;
+  const now = Date.now();
+  if (rateLimitBuckets.size > 1000) {
+    for (const [entryKey, value] of rateLimitBuckets) {
+      if (value.resetAt <= now) rateLimitBuckets.delete(entryKey);
+    }
+    while (rateLimitBuckets.size > 4000) {
+      rateLimitBuckets.delete(rateLimitBuckets.keys().next().value);
+    }
+  }
+  const existing = rateLimitBuckets.get(key);
+  const entry = !existing || existing.resetAt <= now
+    ? { count: 0, resetAt: now + windowMs }
+    : existing;
+  entry.count += 1;
+  rateLimitBuckets.set(key, entry);
+  if (entry.count <= limit) return true;
+  const retryAfter = Math.max(1, Math.ceil((entry.resetAt - now) / 1000));
+  sendJson(res, 429, { error: "Too many requests. Please try again later." }, { "Retry-After": retryAfter });
+  return false;
 }
 
 function ensureChatAccess(req, res, chat, author) {
@@ -1073,7 +1479,9 @@ function buildPlayerAccount(state, body, gmCreated) {
 
   let avatarData = "";
   try {
-    avatarData = validateDataUrl(body.avatarData, MAX_AVATAR_DATA_URL_LENGTH, "Avatar");
+    avatarData = body.avatarData
+      ? persistImageDataUrl(body.avatarData, MAX_AVATAR_DATA_URL_LENGTH, "Avatar")
+      : "";
   } catch (error) {
     return { status: 400, error: error.message };
   }
@@ -1084,8 +1492,12 @@ function buildPlayerAccount(state, body, gmCreated) {
   const character = makeCharacter(accountId, name, handle, "account");
   character.username = username;
   character.avatarData = avatarData;
-  character.accessToken = accessToken;
-  character.auth = { salt, passcodeHash: hashPasscode(passcode, salt) };
+  character.auth = {
+    algorithm: "scrypt",
+    salt,
+    passcodeHash: hashPasscode(passcode, salt, "scrypt"),
+    sessions: [makeStoredSession(accessToken)]
+  };
   character.note = gmCreated ? "GM-created player account" : "Self-created player account";
   if (gmCreated) character.tags = normalizeTags(body.tags);
   return { character, accessToken, account: { accountId, name, username, handle, passcode } };
@@ -1123,14 +1535,17 @@ function parseAccountImportText(text) {
   });
 }
 
-function buildGmCharacter(body) {
+function buildGmCharacter(body, reservedLogins = new Set()) {
   const name = String(body.name || "").trim();
   if (!name) return { status: 400, error: "Character name is required." };
-  if (name.length > 80) return { status: 400, error: "Character name is too long." };
-  const character = makeCharacter(id("char"), name, body.handle || makeHandle(name), body.type === "player" ? "player" : "npc");
+  if (name.length > 40) return { status: 400, error: "Character name is too long." };
+  const handle = normalizeHandle(body.handle, name);
+  if (reservedLogins.has(loginKey(handle))) return { status: 409, error: "That handle is already taken." };
+  reservedLogins.add(loginKey(handle));
+  const character = makeCharacter(id("char"), name, handle, body.type === "player" ? "player" : "npc");
   if (body.avatarData) {
     try {
-      character.avatarData = validateDataUrl(body.avatarData, MAX_AVATAR_DATA_URL_LENGTH, "Avatar");
+      character.avatarData = persistImageDataUrl(body.avatarData, MAX_AVATAR_DATA_URL_LENGTH, "Avatar");
     } catch (error) {
       return { status: 400, error: error.message };
     }
@@ -1138,6 +1553,15 @@ function buildGmCharacter(body) {
   character.note = String(body.note || "").trim();
   character.tags = normalizeTags(body.tags);
   return { character };
+}
+
+function reservedCharacterLogins(state) {
+  const values = new Set();
+  for (const character of state.characters || []) {
+    if (character.handle) values.add(loginKey(character.handle));
+    if (character.type === "account" && character.username) values.add(loginKey(character.username));
+  }
+  return values;
 }
 
 function parseCharacterImportText(text) {
@@ -1243,11 +1667,58 @@ function validateDataUrl(value, maxLength, label) {
   if (!/^data:image\/(?:png|jpe?g|webp|gif);base64,[a-z0-9+/=\r\n]+$/i.test(dataUrl)) {
     throw new Error(`${label} must be a PNG, JPG, WebP, or GIF data URL.`);
   }
-  return dataUrl.replace(/\s/g, "");
+  const normalized = dataUrl.replace(/\s/g, "");
+  parseImageDataUrl(normalized, label);
+  return normalized;
 }
 
-function hashPasscode(passcode, salt) {
-  return crypto.createHash("sha256").update(`${salt}:${String(passcode)}`).digest("hex");
+function parseImageDataUrl(dataUrl, label = "Image") {
+  const match = String(dataUrl || "").match(/^data:image\/(png|jpe?g|webp|gif);base64,([a-z0-9+/=]+)$/i);
+  if (!match) throw new Error(`${label} is not a supported image.`);
+  const buffer = Buffer.from(match[2], "base64");
+  const declared = match[1].toLowerCase().replace("jpg", "jpeg");
+  let detected = "";
+  if (buffer.length >= 8 && buffer.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]))) detected = "png";
+  if (buffer.length >= 3 && buffer[0] === 0xff && buffer[1] === 0xd8 && buffer[2] === 0xff) detected = "jpeg";
+  if (buffer.length >= 6 && ["GIF87a", "GIF89a"].includes(buffer.subarray(0, 6).toString("ascii"))) detected = "gif";
+  if (buffer.length >= 12 && buffer.subarray(0, 4).toString("ascii") === "RIFF" && buffer.subarray(8, 12).toString("ascii") === "WEBP") detected = "webp";
+  if (!detected || detected !== declared) throw new Error(`${label} contents do not match the declared image type.`);
+  return {
+    buffer,
+    mimeType: `image/${detected === "jpeg" ? "jpeg" : detected}`,
+    extension: detected === "jpeg" ? "jpg" : detected
+  };
+}
+
+function persistImageDataUrl(dataUrl, maxLength, label) {
+  const normalized = validateDataUrl(dataUrl, maxLength, label);
+  if (!normalized) return "";
+  const image = parseImageDataUrl(normalized, label);
+  fs.mkdirSync(MEDIA_DIR, { recursive: true });
+  const digest = crypto.createHash("sha256").update(image.buffer).digest("hex").slice(0, 32);
+  const fileName = `media_${digest}.${image.extension}`;
+  const filePath = path.join(MEDIA_DIR, fileName);
+  if (!fs.existsSync(filePath)) fs.writeFileSync(filePath, image.buffer);
+  return `/media/${fileName}`;
+}
+
+function hashPasscode(passcode, salt, algorithm = "scrypt") {
+  if (algorithm === "sha256") {
+    return crypto.createHash("sha256").update(`${salt}:${String(passcode)}`).digest("hex");
+  }
+  return crypto.scryptSync(String(passcode), String(salt), 64, {
+    N: 16384,
+    r: 8,
+    p: 1,
+    maxmem: 64 * 1024 * 1024
+  }).toString("hex");
+}
+
+function verifyPasscode(passcode, auth) {
+  if (!auth?.salt || !auth?.passcodeHash) return false;
+  const algorithm = auth.algorithm === "scrypt" ? "scrypt" : "sha256";
+  const candidate = hashPasscode(passcode, auth.salt, algorithm);
+  return secureStringEqual(candidate, auth.passcodeHash);
 }
 
 function normalizePasscode(value) {
@@ -1279,6 +1750,18 @@ function snapshotKeys(state, keys) {
   return snapshot;
 }
 
+function compressUndoSnapshot(snapshot) {
+  const body = Buffer.from(JSON.stringify(snapshot || {}));
+  return zlib.gzipSync(body, { level: 6 }).toString("base64");
+}
+
+function decompressUndoSnapshot(entry) {
+  if (entry?.snapshotCompressed) {
+    return JSON.parse(zlib.gunzipSync(Buffer.from(entry.snapshotCompressed, "base64")).toString("utf8"));
+  }
+  return entry?.snapshot && typeof entry.snapshot === "object" ? entry.snapshot : {};
+}
+
 function pushAudit(state, action, label, details = {}) {
   state.auditLog ||= [];
   state.auditLog.unshift({
@@ -1298,7 +1781,7 @@ function pushUndo(state, action, label, keys, details = {}) {
     action,
     label,
     keys,
-    snapshot: snapshotKeys(state, keys),
+    snapshotCompressed: compressUndoSnapshot(snapshotKeys(state, keys)),
     createdAt: new Date().toISOString()
   });
   state.undoStack = state.undoStack.slice(0, 12);
@@ -1308,25 +1791,33 @@ function pushUndo(state, action, label, keys, details = {}) {
 function restoreLastUndo(state) {
   const entry = state.undoStack.shift();
   if (!entry) return null;
+  const snapshot = decompressUndoSnapshot(entry);
   for (const key of entry.keys) {
-    state[key] = JSON.parse(JSON.stringify(entry.snapshot[key]));
+    state[key] = JSON.parse(JSON.stringify(snapshot[key]));
   }
   normalizeState(state);
+  migrateEmbeddedMedia(state);
   pushAudit(state, "undo", `已撤销：${entry.label}`, { undoId: entry.id, action: entry.action });
   return entry;
 }
 
 async function routeApi(req, res, url) {
   const state = readState();
+  configureRequestView(req, state);
 
   if (req.method === "GET" && url.pathname === "/api/state") {
     const since = String(url.searchParams.get("since") || "");
+    const context = requestContext.getStore() || {};
+    if (context.accountSessionInvalid) {
+      sendJson(res, 200, { ...publicState(state), accountSessionInvalid: true });
+      return;
+    }
     if (since && since === String(state.updatedAt || "")) {
       sendJson(res, 200, { changed: false, updatedAt: state.updatedAt });
       return;
     }
     if (since) {
-      sendJson(res, 200, { changed: true, updatedAt: state.updatedAt, state: publicState(state) });
+      sendJson(res, 200, publicStatePatch(state, since));
       return;
     }
     sendJson(res, 200, publicState(state));
@@ -1334,6 +1825,7 @@ async function routeApi(req, res, url) {
   }
 
   if (req.method === "POST" && url.pathname === "/api/gm/check") {
+    if (!requireRateLimit(req, res, "gm-check", 12, 10 * 60 * 1000)) return;
     if (!requireAdmin(req, res)) return;
     sendJson(res, 200, { ok: true });
     return;
@@ -1351,13 +1843,35 @@ async function routeApi(req, res, url) {
     return;
   }
 
-  const body = ["POST", "PATCH", "DELETE"].includes(req.method) ? await readBody(req) : {};
+  if (req.method === "GET" && url.pathname === "/api/gm/backup.json") {
+    if (!requireAdmin(req, res)) return;
+    const body = JSON.stringify(exportBackupBundle(state), null, 2);
+    sendText(res, 200, body, "application/json; charset=utf-8", {
+      "Content-Disposition": `attachment; filename="kunibayashi-backup-${new Date().toISOString().slice(0, 10)}.json"`
+    });
+    return;
+  }
+
+  const maxBodyBytes = url.pathname === "/api/gm/restore" ? MAX_BACKUP_BODY_BYTES : MAX_JSON_BODY_BYTES;
+  const body = ["POST", "PATCH", "DELETE"].includes(req.method) ? await readBody(req, maxBodyBytes) : {};
+
+  if (req.method === "POST" && url.pathname === "/api/gm/restore") {
+    if (!requireAdmin(req, res)) return;
+    if (body.confirm !== "RESTORE_KUNIBAYASHI_BACKUP") {
+      return sendJson(res, 400, { error: "Backup restore confirmation is missing." });
+    }
+    backupStateFile("before-restore");
+    const restored = restoreBackupBundle(body.backup);
+    writeState(restored, PATCHABLE_SECTIONS);
+    sendJson(res, 200, publicState(restored));
+    return;
+  }
 
   if (req.method === "POST" && url.pathname === "/api/gm/undo") {
     if (!requireAdmin(req, res)) return;
     const entry = restoreLastUndo(state);
     if (!entry) return sendJson(res, 400, { error: "There is no GM action to undo." });
-    writeState(state);
+    writeState(state, [...entry.keys, "auditLog", "undoStack"]);
     sendJson(res, 200, publicState(state));
     return;
   }
@@ -1367,6 +1881,8 @@ async function routeApi(req, res, url) {
     const title = String(body.title || "").trim();
     const content = String(body.content || "").trim();
     if (!title && !content) return sendJson(res, 400, { error: "请填写公告标题或内容。" });
+    if (title.length > MAX_BULLETIN_TITLE_LENGTH) return sendJson(res, 400, { error: `公告标题最多 ${MAX_BULLETIN_TITLE_LENGTH} 字。` });
+    if (content.length > MAX_BULLETIN_CONTENT_LENGTH) return sendJson(res, 400, { error: `公告内容最多 ${MAX_BULLETIN_CONTENT_LENGTH} 字。` });
     const author = body.authorId ? findCharacter(state, body.authorId) : null;
     const now = new Date().toISOString();
     pushUndo(state, "create_bulletin", title || "创建公告", ["bulletins"], { type: body.type || "bulletin" });
@@ -1383,7 +1899,7 @@ async function routeApi(req, res, url) {
       createdAt: now,
       updatedAt: now
     });
-    writeState(state);
+    writeState(state, ["bulletins", "undoStack", "auditLog"]);
     sendJson(res, 201, publicState(state));
     return;
   }
@@ -1396,16 +1912,20 @@ async function routeApi(req, res, url) {
     if (!bulletin) return sendJson(res, 404, { error: "公告不存在。" });
 
     if (req.method === "PATCH") {
+      const nextTitle = body.title !== undefined ? String(body.title || bulletin.title).trim() : bulletin.title;
+      const nextContent = body.content !== undefined ? String(body.content || "").trim() : bulletin.content;
+      if (nextTitle.length > MAX_BULLETIN_TITLE_LENGTH) return sendJson(res, 400, { error: `公告标题最多 ${MAX_BULLETIN_TITLE_LENGTH} 字。` });
+      if (nextContent.length > MAX_BULLETIN_CONTENT_LENGTH) return sendJson(res, 400, { error: `公告内容最多 ${MAX_BULLETIN_CONTENT_LENGTH} 字。` });
       pushUndo(state, "edit_bulletin", `编辑公告：${bulletin.title}`, ["bulletins"], { bulletinId });
       if (body.type !== undefined) bulletin.type = normalizeBulletinType(body.type);
-      if (body.title !== undefined) bulletin.title = String(body.title || bulletin.title).trim();
-      if (body.content !== undefined) bulletin.content = String(body.content || "").trim();
+      if (body.title !== undefined) bulletin.title = nextTitle;
+      if (body.content !== undefined) bulletin.content = nextContent;
       if (body.authorId !== undefined) bulletin.authorId = findCharacter(state, body.authorId)?.id || "";
       if (body.dayId !== undefined) bulletin.dayId = String(body.dayId || "").trim();
       if (body.gameTime !== undefined) bulletin.gameTime = String(body.gameTime || state.settings.gameTime).trim();
       if (body.isPublic !== undefined) bulletin.isPublic = body.isPublic !== false;
       bulletin.updatedAt = new Date().toISOString();
-      writeState(state);
+      writeState(state, ["bulletins", "undoStack", "auditLog"]);
       sendJson(res, 200, publicState(state));
       return;
     }
@@ -1413,7 +1933,7 @@ async function routeApi(req, res, url) {
     if (req.method === "DELETE") {
       pushUndo(state, "delete_bulletin", `删除公告：${bulletin.title}`, ["bulletins"], { bulletinId });
       state.bulletins = state.bulletins.filter((item) => item.id !== bulletinId);
-      writeState(state);
+      writeState(state, ["bulletins", "undoStack", "auditLog"]);
       sendJson(res, 200, publicState(state));
       return;
     }
@@ -1442,7 +1962,7 @@ async function routeApi(req, res, url) {
     state.characters = workingState.characters;
     state.chats = workingState.chats;
 
-    writeState(state);
+    writeState(state, ["characters", "chats", "undoStack", "auditLog"]);
     sendJson(res, 201, {
       state: publicState(state),
       created
@@ -1452,6 +1972,9 @@ async function routeApi(req, res, url) {
 
   if (req.method === "DELETE" && url.pathname === "/api/player-accounts") {
     if (!requireAdmin(req, res)) return;
+    if (body.all === true && body.confirm !== "DELETE_ALL_PLAYER_ACCOUNTS") {
+      return sendJson(res, 400, { error: "Delete-all account confirmation is missing." });
+    }
     const requestedIds = body.all === true
       ? state.characters.filter((character) => character.type === "account" && character.active !== false).map((character) => character.id)
       : unique(Array.isArray(body.ids) ? body.ids.map(String) : []);
@@ -1460,6 +1983,7 @@ async function routeApi(req, res, url) {
       .filter(Boolean);
     if (!accounts.length) return sendJson(res, 400, { error: "No active player accounts selected." });
 
+    backupStateFile(body.all === true ? "before-delete-all-accounts" : "before-delete-accounts");
     pushUndo(state, "delete_player_accounts", `批量删除玩家账号：${accounts.length} 个`, ["characters", "chats", "relationships", "chatMemberRequests"], { count: accounts.length, accountIds: accounts.map((account) => account.id) });
     const accountIds = new Set(accounts.map((account) => account.id));
     const now = new Date().toISOString();
@@ -1477,7 +2001,7 @@ async function routeApi(req, res, url) {
       !accountIds.has(request.requesterId) && !accountIds.has(request.targetId)
     ));
 
-    writeState(state);
+    writeState(state, ["characters", "chats", "relationships", "chatMemberRequests", "messages", "undoStack", "auditLog"]);
     sendJson(res, 200, {
       state: publicState(state),
       deleted: accounts.map((account) => ({ id: account.id, name: account.name, handle: account.handle, username: account.username }))
@@ -1487,6 +2011,7 @@ async function routeApi(req, res, url) {
 
   if (req.method === "POST" && url.pathname === "/api/player-accounts") {
     const gmCreated = isAdmin(req);
+    if (!gmCreated && !requireRateLimit(req, res, "account-create", 8, 60 * 60 * 1000)) return;
     const built = buildPlayerAccount(state, body, gmCreated);
     if (built.error) return sendJson(res, built.status, { error: built.error });
 
@@ -1497,9 +2022,9 @@ async function routeApi(req, res, url) {
     state.characters.push(built.character);
     addAccountToPublicChats(state, built.character);
 
-    writeState(state);
+    writeState(state, ["characters", "chats", "undoStack", "auditLog"]);
     sendJson(res, 201, {
-      state: publicState(state),
+      state: publicState(state, gmCreated ? {} : { viewerId: built.character.id, adminView: false }),
       accountId: built.character.id,
       accountToken: built.accessToken
     });
@@ -1507,25 +2032,47 @@ async function routeApi(req, res, url) {
   }
 
   if (req.method === "POST" && url.pathname === "/api/player-accounts/login") {
+    if (!requireRateLimit(req, res, "account-login", 12, 10 * 60 * 1000)) return;
     const login = String(body.login || body.username || body.handle || "").trim();
     const passcode = normalizePasscode(body.passcode);
     if (!login || !passcode) return sendJson(res, 400, { error: "Username/@handle and passcode are required." });
 
     const character = findAccountByLogin(state, login);
     if (!character?.auth?.salt || !character?.auth?.passcodeHash) {
-      return sendJson(res, 401, { error: "Account not found or cannot be recovered." });
+      return sendJson(res, 401, { error: "Username/@handle or passcode is incorrect." });
     }
-    if (hashPasscode(passcode, character.auth.salt) !== character.auth.passcodeHash) {
+    if (!verifyPasscode(passcode, character.auth)) {
       return sendJson(res, 401, { error: "Username/@handle or passcode is incorrect." });
     }
 
-    character.accessToken = crypto.randomBytes(24).toString("hex");
-    writeState(state);
+    if (character.auth.algorithm !== "scrypt") {
+      character.auth.salt = crypto.randomBytes(16).toString("hex");
+      character.auth.algorithm = "scrypt";
+      character.auth.passcodeHash = hashPasscode(passcode, character.auth.salt, "scrypt");
+    }
+    const accountToken = crypto.randomBytes(24).toString("hex");
+    character.auth.sessions = [
+      makeStoredSession(accountToken),
+      ...normalizeAccountSessions(character.auth.sessions)
+    ].slice(0, MAX_ACCOUNT_SESSIONS);
+    writeState(state, []);
     sendJson(res, 200, {
-      state: publicState(state),
+      state: publicState(state, { viewerId: character.id, adminView: false }),
       accountId: character.id,
-      accountToken: character.accessToken
+      accountToken
     });
+    return;
+  }
+
+  if (req.method === "POST" && url.pathname === "/api/player-accounts/logout") {
+    const character = accountFromRequest(req, state);
+    const token = String(req.headers["x-account-token"] || "");
+    if (!character || !token) return sendJson(res, 200, { ok: true });
+    const tokenHash = hashSessionToken(token);
+    character.auth.sessions = normalizeAccountSessions(character.auth.sessions)
+      .filter((session) => !secureStringEqual(session.tokenHash, tokenHash));
+    writeState(state, []);
+    sendJson(res, 200, { ok: true });
     return;
   }
 
@@ -1534,39 +2081,46 @@ async function routeApi(req, res, url) {
     const character = authorizeAuthor(req, res, state, characterId);
     if (!character) return;
 
+    const updates = {};
     if (body.name !== undefined) {
       const name = String(body.name || "").trim();
       if (!name) return sendJson(res, 400, { error: "Account name is required." });
       if (name.length > 40) return sendJson(res, 400, { error: "Account name is too long." });
-      character.name = name;
-      character.avatarText = avatarText(name);
+      updates.name = name;
+      updates.avatarText = avatarText(name);
     }
     if (body.handle !== undefined) {
-      const handle = normalizeHandle(body.handle, character.name);
+      const handle = normalizeHandle(body.handle, updates.name || character.name);
       if (state.characters.some((item) => item.id !== character.id && item.handle.toLowerCase() === handle.toLowerCase())) {
         return sendJson(res, 409, { error: "That handle is already taken." });
       }
       if (isAccountLoginTaken(state, handle, character.id)) {
         return sendJson(res, 409, { error: "That handle conflicts with an account username." });
       }
-      character.handle = handle;
+      updates.handle = handle;
     }
     if (body.username !== undefined) {
-      const username = normalizeUsername(body.username, character.handle || character.name);
+      const username = normalizeUsername(body.username, updates.handle || character.handle || updates.name || character.name);
       if (isAccountLoginTaken(state, username, character.id)) {
         return sendJson(res, 409, { error: "That username is already taken." });
       }
-      character.username = username;
+      updates.username = username;
     }
     if (body.avatarData !== undefined) {
       try {
-        character.avatarData = validateDataUrl(body.avatarData, MAX_AVATAR_DATA_URL_LENGTH, "Avatar");
+        updates.avatarData = body.avatarData
+          ? persistImageDataUrl(body.avatarData, MAX_AVATAR_DATA_URL_LENGTH, "Avatar")
+          : "";
       } catch (error) {
         return sendJson(res, 400, { error: error.message });
       }
     }
 
-    writeState(state);
+    if (isAdmin(req)) {
+      pushUndo(state, "edit_player_account", `编辑玩家账号：${character.name}`, ["characters"], { accountId: character.id });
+    }
+    Object.assign(character, updates);
+    writeState(state, ["characters", ...(isAdmin(req) ? ["undoStack", "auditLog"] : [])]);
     sendJson(res, 200, publicState(state));
     return;
   }
@@ -1575,33 +2129,52 @@ async function routeApi(req, res, url) {
     const shortcode = normalizeShortcode(body.shortcode);
     if (!shortcode) return sendJson(res, 400, { error: "Emoji shortcode must use letters, numbers, dash, or underscore." });
 
-    let imageData = "";
-    try {
-      imageData = validateDataUrl(body.imageData, MAX_EMOJI_DATA_URL_LENGTH, "Emoji image");
-    } catch (error) {
-      return sendJson(res, 400, { error: error.message });
-    }
-    if (!imageData) return sendJson(res, 400, { error: "Emoji image is required." });
-
     let ownerId = "";
     if (!isAdmin(req)) {
       const owner = authorizeAuthor(req, res, state, body.ownerId);
       if (!owner) return;
       ownerId = owner.id;
+      if (!requireRateLimit(req, res, `emoji-upload-${owner.id}`, 20, 60 * 60 * 1000)) return;
     } else {
       ownerId = body.ownerId && findCharacter(state, body.ownerId) ? body.ownerId : "";
     }
 
-    state.emojis = state.emojis.filter((emoji) => emoji.shortcode !== shortcode);
-    state.emojis.push({
-      id: id("emoji"),
-      shortcode,
-      name: String(body.name || shortcode).trim().slice(0, 40),
-      imageData,
-      ownerId,
-      createdAt: new Date().toISOString()
-    });
-    writeState(state);
+    const existing = (state.emojis || []).find((emoji) => emoji.shortcode === shortcode);
+    if (!isAdmin(req) && existing && existing.ownerId !== ownerId) {
+      return sendJson(res, 409, { error: "That emoji shortcode belongs to another account or the school." });
+    }
+    const ownerEmojiCount = (state.emojis || []).filter((emoji) => emoji.ownerId === ownerId).length;
+    if (!existing && ownerId && ownerEmojiCount >= MAX_EMOJIS_PER_ACCOUNT) {
+      return sendJson(res, 400, { error: `Each account can upload up to ${MAX_EMOJIS_PER_ACCOUNT} custom emojis.` });
+    }
+    if (!existing && (state.emojis || []).length >= MAX_CUSTOM_EMOJIS) {
+      return sendJson(res, 400, { error: "The school emoji library is full." });
+    }
+
+    let imageData = "";
+    try {
+      imageData = persistImageDataUrl(body.imageData, MAX_EMOJI_DATA_URL_LENGTH, "Emoji image");
+    } catch (error) {
+      return sendJson(res, 400, { error: error.message });
+    }
+    if (!imageData) return sendJson(res, 400, { error: "Emoji image is required." });
+
+    if (existing) {
+      existing.name = String(body.name || shortcode).trim().slice(0, 40);
+      existing.imageData = imageData;
+      if (isAdmin(req)) existing.ownerId = ownerId;
+      existing.updatedAt = new Date().toISOString();
+    } else {
+      state.emojis.push({
+        id: id("emoji"),
+        shortcode,
+        name: String(body.name || shortcode).trim().slice(0, 40),
+        imageData,
+        ownerId,
+        createdAt: new Date().toISOString()
+      });
+    }
+    writeState(state, ["emojis"]);
     sendJson(res, 201, publicState(state));
     return;
   }
@@ -1613,30 +2186,39 @@ async function routeApi(req, res, url) {
     if (!emoji) return sendJson(res, 404, { error: "Emoji not found." });
     pushUndo(state, "delete_emoji", `Delete emoji :${emoji.shortcode}:`, ["emojis"], { emojiId, shortcode: emoji.shortcode });
     state.emojis = (state.emojis || []).filter((item) => item.id !== emoji.id);
-    writeState(state);
+    writeState(state, ["emojis", "undoStack", "auditLog"]);
     sendJson(res, 200, publicState(state));
     return;
   }
 
   if (req.method === "PATCH" && url.pathname === "/api/settings") {
     if (!requireAdmin(req, res)) return;
+    const requestedDay = body.currentDayId !== undefined
+      ? state.calendarDays.find((item) => item.id === normalizeCalendarDayId(body.currentDayId))
+      : null;
+    if (body.currentDayId !== undefined && !requestedDay) {
+      return sendJson(res, 404, { error: "Calendar day not found." });
+    }
+    const nextSettings = {
+      gameTime: String(body.gameTime || state.settings.gameTime).trim(),
+      schoolDay: requestedDay
+        ? calendarDayDisplay(requestedDay)
+        : String(body.schoolDay || state.settings.schoolDay).trim(),
+      currentDayId: requestedDay?.id || state.settings.currentDayId,
+      feedName: String(body.feedName || state.settings.feedName).trim(),
+      chatName: String(body.chatName || state.settings.chatName).trim(),
+      autoAdvanceTimelineTime: body.autoAdvanceTimelineTime !== undefined
+        ? body.autoAdvanceTimelineTime === true
+        : state.settings.autoAdvanceTimelineTime
+    };
+    if (nextSettings.gameTime.length > MAX_GAME_TIME_LENGTH) return sendJson(res, 400, { error: "游戏时间文字过长。" });
+    if (nextSettings.schoolDay.length > MAX_GAME_TIME_LENGTH) return sendJson(res, 400, { error: "校历日期文字过长。" });
+    if (nextSettings.feedName.length > MAX_SITE_NAME_LENGTH || nextSettings.chatName.length > MAX_SITE_NAME_LENGTH) {
+      return sendJson(res, 400, { error: `站点名称最多 ${MAX_SITE_NAME_LENGTH} 字。` });
+    }
     pushUndo(state, "edit_settings", "编辑时间和站点设置", ["settings"]);
-    state.settings.gameTime = String(body.gameTime || state.settings.gameTime).trim();
-    if (body.currentDayId !== undefined) {
-      const requestedDayId = normalizeCalendarDayId(body.currentDayId);
-      const day = state.calendarDays.find((item) => item.id === requestedDayId);
-      if (!day) return sendJson(res, 404, { error: "Calendar day not found." });
-      state.settings.currentDayId = day.id;
-      state.settings.schoolDay = calendarDayDisplay(day);
-    } else {
-      state.settings.schoolDay = String(body.schoolDay || state.settings.schoolDay).trim();
-    }
-    state.settings.feedName = String(body.feedName || state.settings.feedName).trim();
-    state.settings.chatName = String(body.chatName || state.settings.chatName).trim();
-    if (body.autoAdvanceTimelineTime !== undefined) {
-      state.settings.autoAdvanceTimelineTime = body.autoAdvanceTimelineTime === true;
-    }
-    writeState(state);
+    Object.assign(state.settings, nextSettings);
+    writeState(state, ["settings", "undoStack", "auditLog"]);
     sendJson(res, 200, publicState(state));
     return;
   }
@@ -1649,7 +2231,7 @@ async function routeApi(req, res, url) {
     pushUndo(state, "set_current_day", `设置当前日：${day.label}`, ["settings", "calendarDays"], { dayId: day.id });
     state.settings.currentDayId = day.id;
     state.settings.schoolDay = calendarDayDisplay(day);
-    writeState(state);
+    writeState(state, ["settings", "calendarDays", "undoStack", "auditLog"]);
     sendJson(res, 200, publicState(state));
     return;
   }
@@ -1667,6 +2249,11 @@ async function routeApi(req, res, url) {
       return sendJson(res, 400, { error: "请选择要批量修改的内容。" });
     }
 
+    if (String(body.scheduleText || "").length > MAX_SCHEDULE_TEXT_LENGTH) return sendJson(res, 400, { error: "课程表内容过长。" });
+    if (note.length > MAX_CALENDAR_NOTE_LENGTH) return sendJson(res, 400, { error: `日期备注最多 ${MAX_CALENDAR_NOTE_LENGTH} 字。` });
+    if (noteMode === "append" && batch.targets.some((day) => [day.note, note].filter(Boolean).join(" / ").length > MAX_CALENDAR_NOTE_LENGTH)) {
+      return sendJson(res, 400, { error: `追加后日期备注会超过 ${MAX_CALENDAR_NOTE_LENGTH} 字。` });
+    }
     const nextSchedule = updateSchedule ? parseScheduleText(body.scheduleText) : null;
     const label = `${calendarDayDisplay(batch.startDay)} - ${calendarDayDisplay(batch.endDay)}`;
     pushUndo(state, "batch_calendar_schedule", `批量编制课程表：${batch.targets.length} 天`, ["calendarDays"], {
@@ -1691,7 +2278,7 @@ async function routeApi(req, res, url) {
       }
     }
 
-    writeState(state);
+    writeState(state, ["calendarDays", "undoStack", "auditLog"]);
     const payload = publicState(state);
     payload.batchResult = {
       updatedCount: batch.targets.length,
@@ -1716,6 +2303,8 @@ async function routeApi(req, res, url) {
       const title = String(body.title || "").trim();
       const detail = String(body.detail || body.content || "").trim();
       if (!title && !detail) return sendJson(res, 400, { error: "请填写事件标题或内容。" });
+      if (title.length > MAX_EVENT_TITLE_LENGTH) return sendJson(res, 400, { error: `事件标题最多 ${MAX_EVENT_TITLE_LENGTH} 字。` });
+      if (detail.length > MAX_EVENT_DETAIL_LENGTH) return sendJson(res, 400, { error: `事件内容最多 ${MAX_EVENT_DETAIL_LENGTH} 字。` });
       const now = new Date().toISOString();
       pushUndo(state, "create_calendar_event", `创建事件：${title || detail.slice(0, 32)}`, ["calendarDays"], { dayId });
       day.events.push({
@@ -1730,7 +2319,7 @@ async function routeApi(req, res, url) {
         createdAt: now,
         updatedAt: now
       });
-      writeState(state);
+      writeState(state, ["calendarDays", "undoStack", "auditLog"]);
       sendJson(res, 201, publicState(state));
       return;
     }
@@ -1739,14 +2328,18 @@ async function routeApi(req, res, url) {
     if (!event) return sendJson(res, 404, { error: "Calendar event not found." });
 
     if (req.method === "PATCH" && !action) {
+      const nextTitle = body.title !== undefined ? String(body.title || event.title).trim() : event.title;
+      const nextDetail = body.detail !== undefined ? String(body.detail || "").trim() : event.detail;
+      if (nextTitle.length > MAX_EVENT_TITLE_LENGTH) return sendJson(res, 400, { error: `事件标题最多 ${MAX_EVENT_TITLE_LENGTH} 字。` });
+      if (nextDetail.length > MAX_EVENT_DETAIL_LENGTH) return sendJson(res, 400, { error: `事件内容最多 ${MAX_EVENT_DETAIL_LENGTH} 字。` });
       pushUndo(state, "edit_calendar_event", `编辑事件：${event.title}`, ["calendarDays"], { dayId, eventId });
       if (body.type !== undefined) event.type = normalizeEventType(body.type);
-      if (body.title !== undefined) event.title = String(body.title || event.title).trim();
-      if (body.detail !== undefined) event.detail = String(body.detail || "").trim();
+      if (body.title !== undefined) event.title = nextTitle;
+      if (body.detail !== undefined) event.detail = nextDetail;
       if (body.triggerTarget !== undefined) event.triggerTarget = ["bulletin", "none"].includes(body.triggerTarget) ? body.triggerTarget : event.triggerTarget;
       if (body.isPublic !== undefined) event.isPublic = body.isPublic === true;
       event.updatedAt = new Date().toISOString();
-      writeState(state);
+      writeState(state, ["calendarDays", "undoStack", "auditLog"]);
       sendJson(res, 200, publicState(state));
       return;
     }
@@ -1772,7 +2365,7 @@ async function routeApi(req, res, url) {
           updatedAt: now
         });
       }
-      writeState(state);
+      writeState(state, ["calendarDays", "bulletins", "undoStack", "auditLog"]);
       sendJson(res, 200, publicState(state));
       return;
     }
@@ -1780,7 +2373,7 @@ async function routeApi(req, res, url) {
     if (req.method === "DELETE" && !action) {
       pushUndo(state, "delete_calendar_event", `删除事件：${event.title}`, ["calendarDays"], { dayId, eventId });
       day.events = day.events.filter((item) => item.id !== eventId);
-      writeState(state);
+      writeState(state, ["calendarDays", "undoStack", "auditLog"]);
       sendJson(res, 200, publicState(state));
       return;
     }
@@ -1791,14 +2384,27 @@ async function routeApi(req, res, url) {
     const dayId = normalizeCalendarDayId(decodeURIComponent(url.pathname.split("/").pop()));
     const day = state.calendarDays.find((item) => item.id === dayId);
     if (!day) return sendJson(res, 404, { error: "Calendar day not found." });
+    const nextLabel = body.label !== undefined ? String(body.label || day.label).trim() : day.label;
+    const nextDateLabel = body.dateLabel !== undefined ? String(body.dateLabel || "").trim() : day.dateLabel;
+    const nextNote = body.note !== undefined ? String(body.note || "").trim() : day.note;
+    if (!nextLabel) return sendJson(res, 400, { error: "日期标签不能为空。" });
+    if (nextLabel.length > MAX_CALENDAR_LABEL_LENGTH || nextDateLabel.length > MAX_CALENDAR_LABEL_LENGTH) {
+      return sendJson(res, 400, { error: `日期标签最多 ${MAX_CALENDAR_LABEL_LENGTH} 字。` });
+    }
+    if (nextNote.length > MAX_CALENDAR_NOTE_LENGTH) return sendJson(res, 400, { error: `日期备注最多 ${MAX_CALENDAR_NOTE_LENGTH} 字。` });
+    if (body.scheduleText !== undefined && String(body.scheduleText).length > MAX_SCHEDULE_TEXT_LENGTH) {
+      return sendJson(res, 400, { error: "课程表内容过长。" });
+    }
+    const nextSchedule = body.scheduleText !== undefined
+      ? parseScheduleText(body.scheduleText)
+      : (Array.isArray(body.schedule) ? normalizeSchedule(body.schedule) : day.schedule);
     pushUndo(state, "edit_calendar_day", `编辑课程表：${day.label}`, ["settings", "calendarDays"], { dayId });
-    if (body.label !== undefined) day.label = String(body.label || day.label).trim();
-    if (body.dateLabel !== undefined) day.dateLabel = String(body.dateLabel || "").trim();
-    if (body.note !== undefined) day.note = String(body.note || "").trim();
-    if (body.scheduleText !== undefined) day.schedule = parseScheduleText(body.scheduleText);
-    if (Array.isArray(body.schedule)) day.schedule = normalizeSchedule(body.schedule);
+    day.label = nextLabel;
+    day.dateLabel = nextDateLabel;
+    day.note = nextNote;
+    day.schedule = nextSchedule;
     if (state.settings.currentDayId === day.id) state.settings.schoolDay = calendarDayDisplay(day);
-    writeState(state);
+    writeState(state, ["calendarDays", "settings", "undoStack", "auditLog"]);
     sendJson(res, 200, publicState(state));
     return;
   }
@@ -1813,9 +2419,10 @@ async function routeApi(req, res, url) {
 
     const created = [];
     const newCharacters = [];
+    const reservedLogins = reservedCharacterLogins(state);
     for (const row of rows) {
       if (row.error) return sendJson(res, 400, { error: `Row ${row.row}: ${row.error}` });
-      const built = buildGmCharacter(row);
+      const built = buildGmCharacter(row, reservedLogins);
       if (built.error) return sendJson(res, built.status, { error: `Row ${row.row}: ${built.error}` });
       newCharacters.push(built.character);
       created.push({ id: built.character.id, name: built.character.name, handle: built.character.handle, type: built.character.type, tags: built.character.tags });
@@ -1823,27 +2430,31 @@ async function routeApi(req, res, url) {
 
     pushUndo(state, "import_characters", `批量创建角色：${created.length} 个`, ["characters"], { count: created.length });
     state.characters.push(...newCharacters);
-    writeState(state);
+    writeState(state, ["characters", "undoStack", "auditLog"]);
     sendJson(res, 201, { state: publicState(state), created });
     return;
   }
 
   if (req.method === "POST" && url.pathname === "/api/characters") {
     if (!requireAdmin(req, res)) return;
-    const built = buildGmCharacter(body);
+    const built = buildGmCharacter(body, reservedCharacterLogins(state));
     if (built.error) return sendJson(res, built.status, { error: built.error });
     pushUndo(state, "create_character", `创建角色：${built.character.name}`, ["characters"]);
     state.characters.push(built.character);
-    writeState(state);
+    writeState(state, ["characters", "undoStack", "auditLog"]);
     sendJson(res, 201, publicState(state));
     return;
   }
 
   if (req.method === "DELETE" && url.pathname === "/api/characters") {
     if (!requireAdmin(req, res)) return;
-    const characters = state.characters.filter((character) => character.active !== false);
+    if (body.confirm !== "DELETE_NON_ACCOUNT_CHARACTERS") {
+      return sendJson(res, 400, { error: "Delete-all character confirmation is missing." });
+    }
+    const characters = state.characters.filter((character) => character.active !== false && character.type !== "account");
     if (!characters.length) return sendJson(res, 400, { error: "No active characters to delete." });
 
+    backupStateFile("before-delete-all-characters");
     pushUndo(state, "delete_all_characters", `删除全部角色：${characters.length} 个`, ["characters", "chats", "relationships", "chatMemberRequests"], { count: characters.length });
     const characterIds = new Set(characters.map((character) => character.id));
     const now = new Date().toISOString();
@@ -1860,7 +2471,7 @@ async function routeApi(req, res, url) {
     state.chatMemberRequests = (state.chatMemberRequests || []).filter((request) => (
       !characterIds.has(request.requesterId) && !characterIds.has(request.targetId)
     ));
-    writeState(state);
+    writeState(state, ["characters", "chats", "relationships", "chatMemberRequests", "messages", "undoStack", "auditLog"]);
     sendJson(res, 200, {
       state: publicState(state),
       deleted: characters.map((character) => ({ id: character.id, name: character.name, handle: character.handle, type: character.type }))
@@ -1873,6 +2484,9 @@ async function routeApi(req, res, url) {
     const characterId = decodeURIComponent(url.pathname.split("/").pop());
     const character = state.characters.find((item) => item.id === characterId);
     if (!character) return sendJson(res, 404, { error: "Character not found." });
+    if (character.type === "account") {
+      return sendJson(res, 400, { error: "Delete player login accounts from account management." });
+    }
     if (character.active === false) {
       sendJson(res, 200, publicState(state));
       return;
@@ -1890,7 +2504,7 @@ async function routeApi(req, res, url) {
     state.chatMemberRequests = (state.chatMemberRequests || []).filter((request) => (
       request.requesterId !== character.id && request.targetId !== character.id
     ));
-    writeState(state);
+    writeState(state, ["characters", "chats", "relationships", "chatMemberRequests", "messages", "undoStack", "auditLog"]);
     sendJson(res, 200, publicState(state));
     return;
   }
@@ -1900,36 +2514,48 @@ async function routeApi(req, res, url) {
     const characterId = decodeURIComponent(url.pathname.split("/").pop());
     const character = state.characters.find((item) => item.id === characterId);
     if (!character) return sendJson(res, 404, { error: "Character not found." });
-    pushUndo(state, "edit_character", `编辑角色：${character.name}`, ["characters"], { characterId });
+    const updates = {};
     if (body.name !== undefined) {
       const name = String(body.name || "").trim();
       if (!name) return sendJson(res, 400, { error: "Character name is required." });
       if (name.length > 40) return sendJson(res, 400, { error: "Character name is too long." });
-      character.name = name;
-      character.avatarText = avatarText(name);
+      updates.name = name;
+      updates.avatarText = avatarText(name);
     }
     if (body.handle !== undefined) {
-      const handle = normalizeHandle(body.handle, character.name);
+      const handle = normalizeHandle(body.handle, updates.name || character.name);
       if (state.characters.some((item) => item.id !== character.id && item.handle.toLowerCase() === handle.toLowerCase())) {
         return sendJson(res, 409, { error: "That handle is already taken." });
       }
       if (isAccountLoginTaken(state, handle, character.id)) {
         return sendJson(res, 409, { error: "That handle conflicts with an account username." });
       }
-      character.handle = handle;
+      updates.handle = handle;
     }
-    if (body.color !== undefined) character.color = String(body.color).trim() || character.color;
+    if (body.color !== undefined) {
+      const color = String(body.color || "").trim();
+      if (!/^#[a-f0-9]{6}$/i.test(color)) return sendJson(res, 400, { error: "Character color must be a six-digit hex color." });
+      updates.color = color;
+    }
     if (body.avatarData !== undefined) {
       try {
-        character.avatarData = validateDataUrl(body.avatarData, MAX_AVATAR_DATA_URL_LENGTH, "Avatar");
+        updates.avatarData = body.avatarData
+          ? persistImageDataUrl(body.avatarData, MAX_AVATAR_DATA_URL_LENGTH, "Avatar")
+          : "";
       } catch (error) {
         return sendJson(res, 400, { error: error.message });
       }
     }
-    if (body.note !== undefined) character.note = String(body.note).trim();
-    if (body.tags !== undefined) character.tags = normalizeTags(body.tags);
-    if (body.active !== undefined) character.active = Boolean(body.active);
-    writeState(state);
+    if (body.note !== undefined) {
+      const note = String(body.note).trim();
+      if (note.length > MAX_CHARACTER_NOTE_LENGTH) return sendJson(res, 400, { error: `Character note can be up to ${MAX_CHARACTER_NOTE_LENGTH} characters.` });
+      updates.note = note;
+    }
+    if (body.tags !== undefined) updates.tags = normalizeTags(body.tags);
+    if (body.active !== undefined) updates.active = Boolean(body.active);
+    pushUndo(state, "edit_character", `编辑角色：${character.name}`, ["characters"], { characterId });
+    Object.assign(character, updates);
+    writeState(state, ["characters", "undoStack", "auditLog"]);
     sendJson(res, 200, publicState(state));
     return;
   }
@@ -1959,7 +2585,7 @@ async function routeApi(req, res, url) {
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString()
     });
-    writeState(state);
+    writeState(state, ["relationships"]);
     sendJson(res, 201, publicState(state));
     return;
   }
@@ -1975,7 +2601,7 @@ async function routeApi(req, res, url) {
     pushUndo(state, "update_follow", `Set follow ${body.status}`, ["relationships"], { relationshipId });
     relationship.status = body.status;
     relationship.updatedAt = new Date().toISOString();
-    writeState(state);
+    writeState(state, ["relationships", "undoStack", "auditLog"]);
     sendJson(res, 200, publicState(state));
     return;
   }
@@ -2003,7 +2629,7 @@ async function routeApi(req, res, url) {
         createdAt: new Date().toISOString()
       };
       state.chats.push(chat);
-      writeState(state);
+      writeState(state, ["chats", ...(isAdmin(req) ? ["undoStack", "auditLog"] : [])]);
     }
 
     sendJson(res, 201, { state: publicState(state), chatId: chat.id });
@@ -2040,7 +2666,7 @@ async function routeApi(req, res, url) {
     };
     if (isAdmin(req)) pushUndo(state, "create_private_chat", `创建私密群聊：${name}`, ["chats"], { creatorId: creator.id, memberCount: memberIds.length });
     state.chats.push(chat);
-    writeState(state);
+    writeState(state, ["chats", ...(isAdmin(req) ? ["undoStack", "auditLog"] : [])]);
     sendJson(res, 201, { state: publicState(state), chatId: chat.id });
     return;
   }
@@ -2091,7 +2717,7 @@ async function routeApi(req, res, url) {
       updatedAt: new Date().toISOString()
     };
     state.chatMemberRequests.push(request);
-    writeState(state);
+    writeState(state, ["chatMemberRequests"]);
     sendJson(res, 201, { state: publicState(state), requestId: request.id });
     return;
   }
@@ -2128,7 +2754,7 @@ async function routeApi(req, res, url) {
         chat.memberIds = chat.memberIds.filter((memberId) => memberId !== request.targetId);
       }
     }
-    writeState(state);
+    writeState(state, ["chats", "messages", "chatMemberRequests", "undoStack", "auditLog"]);
     sendJson(res, 200, publicState(state));
     return;
   }
@@ -2137,6 +2763,7 @@ async function routeApi(req, res, url) {
     const author = authorizeAuthor(req, res, state, body.authorId);
     const content = String(body.content || "").trim();
     if (!author) return;
+    if (!requireRateLimit(req, res, `timeline-post-${author.id}`, 30, 10 * 60 * 1000)) return;
     if (content.length > MAX_POST_CONTENT_LENGTH) return sendJson(res, 400, { error: `Post content can be up to ${MAX_POST_CONTENT_LENGTH} characters.` });
 
     let attachment = null;
@@ -2144,7 +2771,7 @@ async function routeApi(req, res, url) {
       try {
         attachment = {
           type: "image",
-          dataUrl: validateDataUrl(body.attachment.dataUrl, MAX_POST_IMAGE_DATA_URL_LENGTH, "Post image"),
+          dataUrl: persistImageDataUrl(body.attachment.dataUrl, MAX_POST_IMAGE_DATA_URL_LENGTH, "Post image"),
           name: String(body.attachment.name || "image").trim().slice(0, 80)
         };
       } catch (error) {
@@ -2155,9 +2782,11 @@ async function routeApi(req, res, url) {
     if (!content && !attachment) return sendJson(res, 400, { error: "Post content or image is required." });
     const requestedDayId = body.dayId !== undefined ? resolveTimelineDayId(state, body.dayId) : "";
     if (body.dayId && !requestedDayId) return sendJson(res, 400, { error: "Timeline day was not found." });
-    const dayId = requestedDayId || state.settings.currentDayId || "";
     const explicitGameTime = body.gameTime !== undefined ? String(body.gameTime || "").trim() : "";
-    if (!explicitGameTime && state.settings.autoAdvanceTimelineTime === true) advanceTimelineGameTime(state);
+    if (explicitGameTime.length > MAX_GAME_TIME_LENGTH) return sendJson(res, 400, { error: "Post game time is too long." });
+    const didAutoAdvance = !explicitGameTime && state.settings.autoAdvanceTimelineTime === true;
+    if (didAutoAdvance) advanceTimelineGameTime(state);
+    const dayId = requestedDayId || state.settings.currentDayId || "";
     const gameTime = explicitGameTime || String(state.settings.gameTime).trim();
     const createdAt = new Date().toISOString();
     if (isAdmin(req)) pushUndo(state, "create_post", `以 ${author.name} 发布帖子`, ["posts"], { authorId: author.id });
@@ -2174,7 +2803,7 @@ async function routeApi(req, res, url) {
       metrics: normalizeMetrics(body.metrics),
       replies: []
     });
-    writeState(state);
+    writeState(state, ["posts", ...(didAutoAdvance ? ["settings"] : []), ...(isAdmin(req) ? ["undoStack", "auditLog"] : [])]);
     sendJson(res, 201, publicState(state));
     return;
   }
@@ -2200,7 +2829,7 @@ async function routeApi(req, res, url) {
     const author = findCharacter(state, reply.authorId);
     pushUndo(state, "delete_reply", `删除回复：${author?.name || "Unknown"}`, ["posts"], { postId, replyId, authorId: reply.authorId });
     removePostReply(post, replyId);
-    writeState(state);
+    writeState(state, ["posts", "undoStack", "auditLog"]);
     sendJson(res, 200, publicState(state));
     return;
   }
@@ -2213,8 +2842,16 @@ async function routeApi(req, res, url) {
     if (!post) return sendJson(res, 404, { error: "Post not found." });
 
     if (req.method === "POST" && action === "like") {
-      post.metrics.likes = clampInt(post.metrics.likes, 0) + 1;
-      writeState(state);
+      const actor = authorizeAuthor(req, res, state, body.actorId);
+      if (!actor) return;
+      if (!requireRateLimit(req, res, `post-like-${actor.id}`, 120, 60 * 1000)) return;
+      post.likedBy ||= [];
+      const liked = post.likedBy.includes(actor.id);
+      post.likedBy = liked
+        ? post.likedBy.filter((characterId) => characterId !== actor.id)
+        : [...post.likedBy, actor.id];
+      post.metrics.likes = Math.max(0, clampInt(post.metrics.likes, 0) + (liked ? -1 : 1));
+      writeState(state, ["posts"]);
       sendJson(res, 200, publicState(state));
       return;
     }
@@ -2223,11 +2860,14 @@ async function routeApi(req, res, url) {
       const author = authorizeAuthor(req, res, state, body.authorId);
       const content = String(body.content || "").trim();
       if (!author) return;
+      if (!requireRateLimit(req, res, `timeline-reply-${author.id}`, 90, 10 * 60 * 1000)) return;
       if (!content) return sendJson(res, 400, { error: "Reply content is required." });
       if (content.length > MAX_REPLY_CONTENT_LENGTH) return sendJson(res, 400, { error: `Reply content can be up to ${MAX_REPLY_CONTENT_LENGTH} characters.` });
       post.replies ||= [];
       const parentReplyId = String(body.parentReplyId || "").trim();
       if (parentReplyId && !findPostReply(post, parentReplyId)) return sendJson(res, 404, { error: "Parent reply not found." });
+      const gameTime = String(body.gameTime || state.settings.gameTime).trim();
+      if (gameTime.length > MAX_GAME_TIME_LENGTH) return sendJson(res, 400, { error: "Reply game time is too long." });
       if (isAdmin(req)) pushUndo(state, "create_reply", `Reply to post as ${author.name}`, ["posts"], { postId, authorId: author.id });
       post.replies.push({
         id: id("reply"),
@@ -2235,34 +2875,44 @@ async function routeApi(req, res, url) {
         content,
         parentReplyId,
         isAnonymous: body.isAnonymous === true,
-        gameTime: String(body.gameTime || state.settings.gameTime).trim(),
+        gameTime,
         createdAt: new Date().toISOString()
       });
-      writeState(state);
+      writeState(state, ["posts", ...(isAdmin(req) ? ["undoStack", "auditLog"] : [])]);
       sendJson(res, 201, publicState(state));
       return;
     }
 
     if (req.method === "PATCH" && !action) {
       if (!requireAdmin(req, res)) return;
-      pushUndo(state, "edit_post", "编辑帖子数据 / 时间", ["posts"], { postId });
-      if (body.authorId && findCharacter(state, body.authorId)) post.authorId = body.authorId;
+      const updates = {};
+      if (body.authorId !== undefined) {
+        const author = findCharacter(state, body.authorId);
+        if (!author) return sendJson(res, 400, { error: "Post author was not found." });
+        updates.authorId = author.id;
+      }
       if (body.content !== undefined) {
         const nextContent = String(body.content).trim();
         if (nextContent.length > MAX_POST_CONTENT_LENGTH) return sendJson(res, 400, { error: `Post content can be up to ${MAX_POST_CONTENT_LENGTH} characters.` });
-        post.content = nextContent;
+        updates.content = nextContent;
       }
-      if (body.gameTime !== undefined) post.gameTime = String(body.gameTime).trim();
+      if (body.gameTime !== undefined) {
+        const gameTime = String(body.gameTime).trim();
+        if (gameTime.length > MAX_GAME_TIME_LENGTH) return sendJson(res, 400, { error: "Post game time is too long." });
+        updates.gameTime = gameTime;
+      }
       if (body.dayId !== undefined) {
         const nextDayId = resolveTimelineDayId(state, body.dayId);
         if (body.dayId && !nextDayId) return sendJson(res, 400, { error: "Timeline day was not found." });
-        post.dayId = nextDayId;
+        updates.dayId = nextDayId;
       }
       if (body.gameTime !== undefined || body.dayId !== undefined) {
-        post.timelineSortKey = buildTimelineSortKey(state, post.dayId, post.gameTime);
+        updates.timelineSortKey = buildTimelineSortKey(state, updates.dayId ?? post.dayId, updates.gameTime ?? post.gameTime);
       }
-      if (body.metrics !== undefined) post.metrics = normalizeMetrics(body.metrics);
-      writeState(state);
+      if (body.metrics !== undefined) updates.metrics = normalizeMetrics(body.metrics);
+      pushUndo(state, "edit_post", "编辑帖子数据 / 时间", ["posts"], { postId });
+      Object.assign(post, updates);
+      writeState(state, ["posts", "undoStack", "auditLog"]);
       sendJson(res, 200, publicState(state));
       return;
     }
@@ -2271,7 +2921,7 @@ async function routeApi(req, res, url) {
       if (!requireAdmin(req, res)) return;
       pushUndo(state, "delete_post", "删除帖子", ["posts"], { postId });
       state.posts = state.posts.filter((item) => item.id !== postId);
-      writeState(state);
+      writeState(state, ["posts", "undoStack", "auditLog"]);
       sendJson(res, 200, publicState(state));
       return;
     }
@@ -2281,7 +2931,11 @@ async function routeApi(req, res, url) {
     if (!requireAdmin(req, res)) return;
     const name = String(body.name || "").trim();
     if (!name) return sendJson(res, 400, { error: "Chat name is required." });
+    if (name.length > MAX_CHAT_NAME_LENGTH) return sendJson(res, 400, { error: `Chat name can be up to ${MAX_CHAT_NAME_LENGTH} characters.` });
     const memberIds = unique(Array.isArray(body.memberIds) ? body.memberIds : []);
+    if (memberIds.some((memberId) => !findCharacter(state, memberId))) {
+      return sendJson(res, 400, { error: "One or more chat members could not be found." });
+    }
     pushUndo(state, "create_chat", `创建群聊：${name}`, ["chats"], { memberCount: memberIds.length });
     state.chats.push({
       id: id("chat"),
@@ -2292,7 +2946,7 @@ async function routeApi(req, res, url) {
       createdBy: "",
       createdAt: new Date().toISOString()
     });
-    writeState(state);
+    writeState(state, ["chats", "undoStack", "auditLog"]);
     sendJson(res, 201, publicState(state));
     return;
   }
@@ -2315,7 +2969,7 @@ async function routeApi(req, res, url) {
     state.chats = state.chats.filter((item) => item.id !== chat.id);
     state.messages = state.messages.filter((message) => message.chatId !== chat.id);
     state.chatMemberRequests = (state.chatMemberRequests || []).filter((request) => request.chatId !== chat.id);
-    writeState(state);
+    writeState(state, ["chats", "messages", "chatMemberRequests", "undoStack", "auditLog"]);
     sendJson(res, 200, publicState(state));
     return;
   }
@@ -2325,12 +2979,19 @@ async function routeApi(req, res, url) {
     const chatId = decodeURIComponent(url.pathname.split("/").pop());
     const chat = state.chats.find((item) => item.id === chatId);
     if (!chat) return sendJson(res, 404, { error: "Chat not found." });
+    const nextName = body.name !== undefined ? String(body.name).trim() : chat.name;
+    if (!nextName) return sendJson(res, 400, { error: "Chat name is required." });
+    if (nextName.length > MAX_CHAT_NAME_LENGTH) return sendJson(res, 400, { error: `Chat name can be up to ${MAX_CHAT_NAME_LENGTH} characters.` });
+    const nextMemberIds = body.memberIds !== undefined ? unique(Array.isArray(body.memberIds) ? body.memberIds : []) : chat.memberIds;
+    if (nextMemberIds.some((memberId) => !findCharacter(state, memberId))) {
+      return sendJson(res, 400, { error: "One or more chat members could not be found." });
+    }
     pushUndo(state, "edit_chat", `编辑群聊：${chat.name}`, ["chats"], { chatId });
-    if (body.name !== undefined) chat.name = String(body.name).trim() || chat.name;
-    if (body.memberIds !== undefined) chat.memberIds = unique(Array.isArray(body.memberIds) ? body.memberIds : []);
+    chat.name = nextName;
+    chat.memberIds = nextMemberIds;
     if (body.isPublic !== undefined) chat.isPublic = Boolean(body.isPublic);
     if (body.type !== undefined) chat.type = body.type === "direct" ? "direct" : "group";
-    writeState(state);
+    writeState(state, ["chats", "messages", "undoStack", "auditLog"]);
     sendJson(res, 200, publicState(state));
     return;
   }
@@ -2342,13 +3003,17 @@ async function routeApi(req, res, url) {
     if (!author) return;
     if (!chat) return sendJson(res, 400, { error: "Chat not found." });
     if (!ensureChatAccess(req, res, chat, author)) return;
+    if (!requireRateLimit(req, res, `chat-message-${author.id}`, 180, 60 * 1000)) return;
+    if (content.length > MAX_MESSAGE_CONTENT_LENGTH) {
+      return sendJson(res, 400, { error: `Message content can be up to ${MAX_MESSAGE_CONTENT_LENGTH} characters.` });
+    }
 
     let attachment = null;
     if (body.attachment?.dataUrl) {
       try {
         attachment = {
           type: "image",
-          dataUrl: validateDataUrl(body.attachment.dataUrl, MAX_CHAT_IMAGE_DATA_URL_LENGTH, "Chat image"),
+          dataUrl: persistImageDataUrl(body.attachment.dataUrl, MAX_CHAT_IMAGE_DATA_URL_LENGTH, "Chat image"),
           name: String(body.attachment.name || "image").trim().slice(0, 80)
         };
       } catch (error) {
@@ -2357,6 +3022,8 @@ async function routeApi(req, res, url) {
     }
 
     if (!content && !attachment) return sendJson(res, 400, { error: "消息内容或图片不能为空。" });
+    const gameTime = String(body.gameTime || state.settings.gameTime).trim();
+    if (gameTime.length > MAX_GAME_TIME_LENGTH) return sendJson(res, 400, { error: "Message game time is too long." });
     if (isAdmin(req)) pushUndo(state, "send_message", `Send message as ${author.name}`, ["messages"], { chatId: chat.id, authorId: author.id });
     state.messages.push({
       id: id("msg"),
@@ -2365,10 +3032,10 @@ async function routeApi(req, res, url) {
       isAnonymous: body.isAnonymous === true,
       content,
       attachment,
-      gameTime: String(body.gameTime || state.settings.gameTime).trim(),
+      gameTime,
       createdAt: new Date().toISOString()
     });
-    writeState(state);
+    writeState(state, ["messages", ...(isAdmin(req) ? ["undoStack", "auditLog"] : [])]);
     sendJson(res, 201, publicState(state));
     return;
   }
@@ -2380,7 +3047,7 @@ async function routeApi(req, res, url) {
     if (!message) return sendJson(res, 404, { error: "消息不存在。" });
     pushUndo(state, "delete_message", "删除消息", ["messages"], { messageId, chatId: message.chatId });
     state.messages = state.messages.filter((item) => item.id !== messageId);
-    writeState(state);
+    writeState(state, ["messages", "undoStack", "auditLog"]);
     sendJson(res, 200, publicState(state));
     return;
   }
@@ -2391,23 +3058,46 @@ async function routeApi(req, res, url) {
 function serveStatic(req, res, url) {
   const requested = url.pathname === "/" ? "/index.html" : decodeURIComponent(url.pathname);
   const filePath = path.resolve(PUBLIC_DIR, `.${requested}`);
-  if (!filePath.startsWith(PUBLIC_DIR)) {
+  const publicRoot = path.resolve(PUBLIC_DIR);
+  if (filePath !== publicRoot && !filePath.startsWith(`${publicRoot}${path.sep}`)) {
     sendText(res, 403, "Forbidden");
     return;
   }
 
   fs.readFile(filePath, (error, data) => {
     if (error) {
+      if (path.extname(requested)) {
+        sendText(res, 404, "Not found");
+        return;
+      }
       fs.readFile(path.join(PUBLIC_DIR, "index.html"), (fallbackError, fallbackData) => {
         if (fallbackError) return sendText(res, 404, "Not found");
-        res.writeHead(200, { "Content-Type": MIME[".html"], "Cache-Control": "no-store" });
-        res.end(fallbackData);
+        sendBody(res, 200, fallbackData, { "Content-Type": MIME[".html"], "Cache-Control": "no-cache" });
       });
       return;
     }
     const ext = path.extname(filePath).toLowerCase();
-    res.writeHead(200, { "Content-Type": MIME[ext] || "application/octet-stream", "Cache-Control": "no-store" });
-    res.end(data);
+    const cacheControl = [".html", ".css", ".js"].includes(ext)
+      ? "no-cache"
+      : "public, max-age=300, must-revalidate";
+    sendBody(res, 200, data, { "Content-Type": MIME[ext] || "application/octet-stream", "Cache-Control": cacheControl });
+  });
+}
+
+function serveMedia(req, res, url) {
+  if (req.method !== "GET") return sendText(res, 405, "Method not allowed");
+  const requested = decodeURIComponent(url.pathname.replace(/^\/media\//, ""));
+  if (!/^[a-z0-9_.-]+$/i.test(requested)) return sendText(res, 404, "Not found");
+  const mediaRoot = path.resolve(MEDIA_DIR);
+  const filePath = path.resolve(MEDIA_DIR, requested);
+  if (!filePath.startsWith(`${mediaRoot}${path.sep}`)) return sendText(res, 403, "Forbidden");
+  fs.readFile(filePath, (error, data) => {
+    if (error) return sendText(res, 404, "Not found");
+    const contentType = MIME[path.extname(filePath).toLowerCase()] || "application/octet-stream";
+    sendBody(res, 200, data, {
+      "Content-Type": contentType,
+      "Cache-Control": "public, max-age=31536000, immutable"
+    });
   });
 }
 
@@ -2548,26 +3238,75 @@ function exportChatMarkdown(state) {
   return `${lines.join("\n").trim()}\n`;
 }
 
-ensureState();
+function initializeRuntimeState() {
+  if (process.env.NODE_ENV === "production" && GM_PIN === "gm") {
+    throw new Error("GM_PIN must be configured to a non-default value in production.");
+  }
+  fs.mkdirSync(DATA_DIR, { recursive: true });
+  fs.mkdirSync(MEDIA_DIR, { recursive: true });
+  ensureState();
+  const before = fs.readFileSync(STATE_FILE, "utf8");
+  const state = readState();
+  const mediaChanged = migrateEmbeddedMedia(state);
+  const normalized = JSON.stringify(state, null, 2);
+  if (mediaChanged || normalized !== before) {
+    backupStateFile("startup-migration");
+    lastPeriodicBackupAt = Date.now();
+    writeState(state, PATCHABLE_SECTIONS);
+  }
+  serverReady = true;
+  return state;
+}
 
-http.createServer((req, res) => {
-  const url = new URL(req.url, `http://${req.headers.host || "localhost"}`);
-  if (req.method === "GET" && (url.pathname === "/healthz" || url.pathname === "/api/health")) {
-    sendJson(res, 200, { ok: true });
-    return;
-  }
-  if (!url.pathname.startsWith("/api/")) {
-    serveStatic(req, res, url);
-    return;
-  }
-  const forceAccountView = String(req.headers["x-view-mode"] || "").toLowerCase() === "account";
-  requestContext.run({ adminView: isAdmin(req) && !forceAccountView }, () => {
-    routeApi(req, res, url).catch((error) => {
-      console.error(error);
-      sendJson(res, 500, { error: error.message || "Internal server error." });
+function createHttpServer() {
+  return http.createServer((req, res) => {
+    requestContext.run({ req, adminView: false, viewerId: "" }, () => {
+      try {
+        const url = new URL(req.url, `http://${req.headers.host || "localhost"}`);
+        if (req.method === "GET" && (url.pathname === "/healthz" || url.pathname === "/api/health")) {
+          sendJson(res, serverReady ? 200 : 503, { ok: serverReady });
+          return;
+        }
+        if (url.pathname.startsWith("/media/")) {
+          serveMedia(req, res, url);
+          return;
+        }
+        if (!url.pathname.startsWith("/api/")) {
+          serveStatic(req, res, url);
+          return;
+        }
+        routeApi(req, res, url).catch((error) => {
+          console.error(error);
+          sendJson(res, Number(error.statusCode) || 500, { error: error.message || "Internal server error." });
+        });
+      } catch (error) {
+        console.error(error);
+        sendJson(res, Number(error.statusCode) || 500, { error: error.message || "Internal server error." });
+      }
     });
   });
-}).listen(PORT, HOST, () => {
-  console.log(`TRPG SNS system running at http://localhost:${PORT}`);
-  console.log(`GM PIN: ${GM_PIN === "gm" ? "gm (set GM_PIN for real sessions)" : "configured"}`);
-});
+}
+
+function startServer() {
+  initializeRuntimeState();
+  const server = createHttpServer();
+  server.listen(PORT, HOST, () => {
+    console.log(`TRPG SNS system running at http://localhost:${PORT}`);
+    console.log(`GM PIN: ${GM_PIN === "gm" ? "gm (set GM_PIN for real sessions)" : "configured"}`);
+  });
+  return server;
+}
+
+if (require.main === module) startServer();
+
+module.exports = {
+  advanceTimelineGameTime,
+  buildPlayerAccount,
+  createHttpServer,
+  normalizeState,
+  publicState,
+  publicStatePatch,
+  restoreBackupBundle,
+  startServer,
+  verifyPasscode
+};

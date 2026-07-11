@@ -3952,3 +3952,109 @@ select:focus {
     grid-template-columns: 1fr;
   }
 }
+
+/* Stable search and compact conversation controls. */
+.feed-search-row,
+.roster-search-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+  align-items: center;
+}
+
+.backup-controls {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+  align-items: center;
+}
+
+.load-more-button,
+.load-older-messages {
+  justify-self: center;
+  width: min(100%, 420px);
+}
+
+.load-older-messages {
+  flex: 0 0 auto;
+  margin: 0 auto 4px;
+}
+
+.metric-button.active {
+  border-color: var(--school-green);
+  background: #e7f1dc;
+  color: var(--school-green);
+  font-weight: 850;
+}
+
+.gm-view-float {
+  right: 8px;
+  bottom: 12px;
+  min-width: 96px;
+  padding-inline: 11px;
+  opacity: 0.9;
+}
+
+.gm-view-float:hover,
+.gm-view-float:focus-visible {
+  opacity: 1;
+}
+
+@media (min-width: 881px) {
+  .chat-layout.search-collapsed:not(.with-drawer) {
+    grid-template-columns: minmax(180px, 230px) minmax(0, 1fr);
+  }
+
+  .chat-layout.search-collapsed.with-drawer {
+    grid-template-columns: minmax(180px, 220px) minmax(0, 1fr) minmax(220px, 280px);
+  }
+
+  .message-form {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: 7px;
+    align-items: end;
+    padding: 8px;
+  }
+
+  .message-form textarea {
+    grid-column: 1;
+    min-height: 44px;
+    max-height: 96px;
+    width: 100%;
+  }
+
+  .message-form > .primary-button {
+    grid-column: 2;
+    grid-row: 1;
+    align-self: stretch;
+    min-width: 68px;
+  }
+
+  .message-form .message-tools {
+    grid-column: 1 / -1;
+    width: 100%;
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    overflow-y: hidden;
+    max-height: 38px;
+    padding-bottom: 2px;
+  }
+
+  .message-form .message-tools > *,
+  .message-form .emoji-bar {
+    flex: 0 0 auto;
+    flex-wrap: nowrap;
+  }
+}
+
+@media (max-width: 720px) {
+  .backup-controls {
+    grid-template-columns: 1fr;
+  }
+
+  .feed-search-row,
+  .roster-search-row {
+    grid-template-columns: minmax(0, 1fr) auto;
+  }
+}
