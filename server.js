@@ -14,6 +14,12 @@ const BACKUP_DIR = path.join(DATA_DIR, "backups");
 const PORT = Number(process.env.PORT || 4173);
 const HOST = process.env.HOST || "0.0.0.0";
 const GM_PIN = process.env.GM_PIN || "gm";
+const OFFSITE_BACKUP_URL = String(process.env.OFFSITE_BACKUP_URL || "").trim();
+const OFFSITE_BACKUP_TOKEN = String(process.env.OFFSITE_BACKUP_TOKEN || "").trim();
+const OFFSITE_BACKUP_METHOD = ["POST", "PUT"].includes(String(process.env.OFFSITE_BACKUP_METHOD || "PUT").toUpperCase())
+  ? String(process.env.OFFSITE_BACKUP_METHOD || "PUT").toUpperCase()
+  : "PUT";
+const OFFSITE_BACKUP_INTERVAL_MINUTES = Math.max(0, Number(process.env.OFFSITE_BACKUP_INTERVAL_MINUTES || 0));
 const MAX_JSON_BODY_BYTES = 24 * 1024 * 1024;
 const MAX_BACKUP_BODY_BYTES = 96 * 1024 * 1024;
 const MAX_AVATAR_DATA_URL_LENGTH = 2500000;
@@ -34,6 +40,16 @@ const MAX_CALENDAR_NOTE_LENGTH = 1200;
 const MAX_CHARACTER_NOTE_LENGTH = 1200;
 const MAX_GAME_TIME_LENGTH = 120;
 const MAX_SITE_NAME_LENGTH = 80;
+const MAX_PROFILE_BIO_LENGTH = 500;
+const MAX_PROFILE_FIELD_LENGTH = 80;
+const MAX_NOTIFICATION_COUNT = 2000;
+const MAX_SCHEDULED_ITEMS = 500;
+const MAX_GM_NOTES = 1000;
+const MAX_GM_NOTE_LENGTH = 2000;
+const MAX_POLL_OPTIONS = 8;
+const MAX_POLL_OPTION_LENGTH = 120;
+const MAX_PLATFORM_EVENT_MESSAGE_LENGTH = 1000;
+const DEFAULT_MESSAGE_EDIT_WINDOW_MINUTES = 15;
 const MAX_EMOJIS_PER_ACCOUNT = 25;
 const MAX_CUSTOM_EMOJIS = 200;
 const MAX_ACCOUNT_IMPORT_COUNT = 120;
@@ -53,6 +69,14 @@ const PATCHABLE_SECTIONS = [
   "emojis",
   "relationships",
   "chatMemberRequests",
+  "notifications",
+  "scheduledItems",
+  "presence",
+  "moderation",
+  "bookmarks",
+  "gmNotes",
+  "platformEvents",
+  "systemStatus",
   "auditLog",
   "undoStack"
 ];
@@ -60,8 +84,12 @@ const PATCHABLE_SECTIONS = [
 let cachedState = null;
 let serverReady = false;
 let lastPeriodicBackupAt = 0;
+let offsiteBackupTimer = null;
+let offsiteBackupInFlight = null;
 const rateLimitBuckets = new Map();
+const slowModeActivity = new Map();
 const requestContext = new AsyncLocalStorage();
+const GM_NOTIFICATION_RECIPIENT = "__gm__";
 
 const MIME = {
   ".html": "text/html; charset=utf-8",
@@ -293,7 +321,8 @@ function createInitialState() {
       schoolDay: "周一",
       currentDayId: "day_mon",
       feedName: "Kokubayashi SNS",
-      chatName: "K-LINE"
+      chatName: "K-LINE",
+      sessionControl: defaultSessionControl()
     },
     characters: seededCharacters,
     chats: [
@@ -347,6 +376,15 @@ function createInitialState() {
     bulletins: [],
     emojis: defaultEmojis(),
     relationships: [],
+    chatMemberRequests: [],
+    notifications: [],
+    scheduledItems: [],
+    presence: [],
+    moderation: [],
+    bookmarks: [],
+    gmNotes: [],
+    platformEvents: [],
+    systemStatus: defaultSystemStatus(),
     auditLog: [],
     undoStack: [],
     updatedAt: now
@@ -354,7 +392,7 @@ function createInitialState() {
 }
 
 function normalizeState(state) {
-  state.version = Math.max(Number(state.version || 1), 8);
+  state.version = Math.max(Number(state.version || 1), 9);
   state.updatedAt ||= new Date().toISOString();
   state.sectionVersions ||= {};
   state.settings ||= {};
@@ -364,6 +402,7 @@ function normalizeState(state) {
   state.settings.feedName ||= "Kokubayashi SNS";
   state.settings.chatName ||= "K-LINE";
   state.settings.autoAdvanceTimelineTime = state.settings.autoAdvanceTimelineTime === true;
+  state.settings.sessionControl = normalizeSessionControl(state.settings.sessionControl);
   state.characters ||= [];
   state.chats ||= [];
   state.calendarDays ||= defaultCalendarDays();
@@ -373,6 +412,14 @@ function normalizeState(state) {
   state.emojis ||= defaultEmojis();
   state.relationships ||= [];
   state.chatMemberRequests ||= [];
+  state.notifications ||= [];
+  state.scheduledItems ||= [];
+  state.presence ||= [];
+  state.moderation ||= [];
+  state.bookmarks ||= [];
+  state.gmNotes ||= [];
+  state.platformEvents ||= [];
+  state.systemStatus = normalizeSystemStatus(state.systemStatus);
   state.auditLog ||= [];
   state.undoStack ||= [];
 
@@ -393,6 +440,12 @@ function normalizeState(state) {
       delete character.accessToken;
     }
     character.tags = normalizeTags(character.tags);
+    character.bio = String(character.bio || "").trim().slice(0, MAX_PROFILE_BIO_LENGTH);
+    character.location = String(character.location || "").trim().slice(0, MAX_PROFILE_FIELD_LENGTH);
+    character.birthday = String(character.birthday || "").trim().slice(0, MAX_PROFILE_FIELD_LENGTH);
+    character.bannerData = String(character.bannerData || "").trim();
+    character.pinnedPostId = String(character.pinnedPostId || "").trim();
+    character.profileHistory = normalizeProfileHistory(character.profileHistory);
     character.active = character.active !== false;
   }
 
@@ -400,6 +453,7 @@ function normalizeState(state) {
     chat.memberIds = unique(chat.memberIds || []);
     chat.type ||= "group";
     chat.createdBy ||= "";
+    chat.pinnedMessageIds = unique(Array.isArray(chat.pinnedMessageIds) ? chat.pinnedMessageIds.map(String) : []);
     if (chat.id === "chat_1a") chat.isPublic = true;
   }
 
@@ -438,6 +492,9 @@ function normalizeState(state) {
     post.timelineSortKey = buildTimelineSortKey(state, post.dayId, post.gameTime);
     post.metrics = normalizeMetrics(post.metrics);
     post.likedBy = unique(Array.isArray(post.likedBy) ? post.likedBy.map(String) : []);
+    post.repostOfPostId = String(post.repostOfPostId || "").trim();
+    post.quotePostId = String(post.quotePostId || "").trim();
+    post.poll = normalizePoll(post.poll);
     post.replies ||= [];
     post.isAnonymous = post.isAnonymous === true;
     for (const reply of post.replies) {
@@ -454,6 +511,10 @@ function normalizeState(state) {
 
   for (const message of state.messages) {
     message.isAnonymous = message.isAnonymous === true;
+    message.replyToMessageId = String(message.replyToMessageId || "").trim();
+    message.reactions = normalizeReactions(message.reactions);
+    message.editedAt = String(message.editedAt || "").trim();
+    message.deletedAt = String(message.deletedAt || "").trim();
     if (message.imageData && !message.attachment) {
       message.attachment = { type: "image", dataUrl: message.imageData, name: "image" };
       delete message.imageData;
@@ -461,10 +522,213 @@ function normalizeState(state) {
   }
 
   state.bulletins = normalizeBulletins(state.bulletins);
+  state.notifications = normalizeNotifications(state.notifications);
+  state.scheduledItems = normalizeScheduledItems(state.scheduledItems);
+  state.presence = normalizePresence(state.presence, state.characters);
+  state.moderation = normalizeModeration(state.moderation);
+  state.bookmarks = normalizeBookmarks(state.bookmarks);
+  state.gmNotes = normalizeGmNotes(state.gmNotes);
+  state.platformEvents = normalizePlatformEvents(state.platformEvents);
   state.auditLog = normalizeAuditLog(state.auditLog);
   state.undoStack = normalizeUndoStack(state.undoStack);
 
   return state;
+}
+
+function defaultSessionControl() {
+  return {
+    readOnly: false,
+    timelineLocked: false,
+    chatLocked: false,
+    signupEnabled: true,
+    slowModeSeconds: 0,
+    messageEditWindowMinutes: DEFAULT_MESSAGE_EDIT_WINDOW_MINUTES,
+    mutedCharacterIds: [],
+    lockedChatIds: [],
+    announcement: ""
+  };
+}
+
+function normalizeSessionControl(value) {
+  const source = value && typeof value === "object" ? value : {};
+  return {
+    readOnly: source.readOnly === true,
+    timelineLocked: source.timelineLocked === true,
+    chatLocked: source.chatLocked === true,
+    signupEnabled: source.signupEnabled !== false,
+    slowModeSeconds: Math.min(3600, clampInt(source.slowModeSeconds, 0)),
+    messageEditWindowMinutes: Math.min(1440, clampInt(source.messageEditWindowMinutes, DEFAULT_MESSAGE_EDIT_WINDOW_MINUTES)),
+    mutedCharacterIds: unique(Array.isArray(source.mutedCharacterIds) ? source.mutedCharacterIds.map(String) : []),
+    lockedChatIds: unique(Array.isArray(source.lockedChatIds) ? source.lockedChatIds.map(String) : []),
+    announcement: String(source.announcement || "").trim().slice(0, MAX_PLATFORM_EVENT_MESSAGE_LENGTH)
+  };
+}
+
+function defaultSystemStatus() {
+  return {
+    offsiteBackup: {
+      configured: Boolean(OFFSITE_BACKUP_URL),
+      intervalMinutes: OFFSITE_BACKUP_INTERVAL_MINUTES,
+      lastAttemptAt: "",
+      lastSuccessAt: "",
+      lastError: ""
+    }
+  };
+}
+
+function normalizeSystemStatus(value) {
+  const fallback = defaultSystemStatus();
+  const source = value && typeof value === "object" ? value : {};
+  const backup = source.offsiteBackup && typeof source.offsiteBackup === "object" ? source.offsiteBackup : {};
+  return {
+    offsiteBackup: {
+      configured: Boolean(OFFSITE_BACKUP_URL),
+      intervalMinutes: OFFSITE_BACKUP_INTERVAL_MINUTES,
+      lastAttemptAt: String(backup.lastAttemptAt || ""),
+      lastSuccessAt: String(backup.lastSuccessAt || ""),
+      lastError: String(backup.lastError || "").slice(0, 500)
+    }
+  };
+}
+
+function normalizeProfileHistory(entries) {
+  if (!Array.isArray(entries)) return [];
+  return entries.map((entry) => ({
+    name: String(entry?.name || "").trim().slice(0, 40),
+    handle: normalizeHandle(entry?.handle || "", entry?.name || "former"),
+    changedAt: entry?.changedAt || new Date().toISOString()
+  })).filter((entry) => entry.name || entry.handle).slice(0, 12);
+}
+
+function normalizePoll(poll) {
+  if (!poll || typeof poll !== "object") return null;
+  const options = (Array.isArray(poll.options) ? poll.options : [])
+    .slice(0, MAX_POLL_OPTIONS)
+    .map((option, index) => ({
+      id: String(option?.id || `option_${index + 1}`),
+      text: String(option?.text || "").trim().slice(0, MAX_POLL_OPTION_LENGTH),
+      voterIds: unique(Array.isArray(option?.voterIds) ? option.voterIds.map(String) : [])
+    }))
+    .filter((option) => option.text);
+  if (options.length < 2) return null;
+  return {
+    question: String(poll.question || "投票").trim().slice(0, 200),
+    options,
+    multiple: poll.multiple === true,
+    closed: poll.closed === true,
+    closesAt: String(poll.closesAt || "").trim()
+  };
+}
+
+function normalizeReactions(reactions) {
+  const source = reactions && typeof reactions === "object" && !Array.isArray(reactions) ? reactions : {};
+  const result = {};
+  for (const [reaction, actorIds] of Object.entries(source)) {
+    const key = String(reaction || "").trim().slice(0, 32);
+    if (!key) continue;
+    result[key] = unique(Array.isArray(actorIds) ? actorIds.map(String) : []);
+  }
+  return result;
+}
+
+function normalizeNotifications(entries) {
+  if (!Array.isArray(entries)) return [];
+  return entries.map((entry) => ({
+    id: entry.id || id("notification"),
+    recipientId: String(entry.recipientId || "").trim(),
+    actorId: String(entry.actorId || "").trim(),
+    type: String(entry.type || "info").trim().slice(0, 40),
+    text: String(entry.text || "").trim().slice(0, 500),
+    postId: String(entry.postId || "").trim(),
+    replyId: String(entry.replyId || "").trim(),
+    chatId: String(entry.chatId || "").trim(),
+    messageId: String(entry.messageId || "").trim(),
+    readAt: String(entry.readAt || "").trim(),
+    createdAt: entry.createdAt || new Date().toISOString()
+  })).filter((entry) => entry.recipientId && entry.text).slice(0, MAX_NOTIFICATION_COUNT);
+}
+
+function normalizeScheduledItems(entries) {
+  if (!Array.isArray(entries)) return [];
+  const types = new Set(["post", "message", "bulletin", "platform_event"]);
+  return entries.map((entry) => ({
+    id: entry.id || id("scheduled"),
+    type: types.has(entry.type) ? entry.type : "post",
+    dayId: String(entry.dayId || "").trim(),
+    gameTime: String(entry.gameTime || "").trim().slice(0, MAX_GAME_TIME_LENGTH),
+    payload: entry.payload && typeof entry.payload === "object" ? entry.payload : {},
+    status: ["pending", "completed", "cancelled", "failed"].includes(entry.status) ? entry.status : "pending",
+    error: String(entry.error || "").slice(0, 500),
+    createdAt: entry.createdAt || new Date().toISOString(),
+    executedAt: String(entry.executedAt || "").trim()
+  })).slice(0, MAX_SCHEDULED_ITEMS);
+}
+
+function normalizePresence(entries, characters) {
+  const source = Array.isArray(entries) ? entries : [];
+  const byCharacter = new Map(source.map((entry) => [entry.characterId, entry]));
+  return (characters || []).filter((character) => character.active !== false).map((character) => {
+    const entry = byCharacter.get(character.id) || {};
+    return {
+      characterId: character.id,
+      status: ["online", "away", "busy", "offline"].includes(entry.status) ? entry.status : "offline",
+      statusText: String(entry.statusText || "").trim().slice(0, 80),
+      typingChatId: String(entry.typingChatId || "").trim(),
+      lastSeenAt: String(entry.lastSeenAt || "").trim(),
+      updatedAt: entry.updatedAt || new Date().toISOString()
+    };
+  });
+}
+
+function normalizeModeration(entries) {
+  if (!Array.isArray(entries)) return [];
+  return entries.map((entry) => ({
+    id: entry.id || id("moderation"),
+    actorId: String(entry.actorId || "").trim(),
+    targetId: String(entry.targetId || "").trim(),
+    type: entry.type === "block" ? "block" : "mute",
+    createdAt: entry.createdAt || new Date().toISOString()
+  })).filter((entry) => entry.actorId && entry.targetId && entry.actorId !== entry.targetId);
+}
+
+function normalizeBookmarks(entries) {
+  if (!Array.isArray(entries)) return [];
+  return entries.map((entry) => ({
+    id: entry.id || id("bookmark"),
+    actorId: String(entry.actorId || "").trim(),
+    postId: String(entry.postId || "").trim(),
+    createdAt: entry.createdAt || new Date().toISOString()
+  })).filter((entry) => entry.actorId && entry.postId);
+}
+
+function normalizeGmNotes(entries) {
+  if (!Array.isArray(entries)) return [];
+  return entries.map((entry) => ({
+    id: entry.id || id("gm_note"),
+    targetType: ["character", "post", "chat"].includes(entry.targetType) ? entry.targetType : "character",
+    targetId: String(entry.targetId || "").trim(),
+    content: String(entry.content || "").trim().slice(0, MAX_GM_NOTE_LENGTH),
+    createdAt: entry.createdAt || new Date().toISOString(),
+    updatedAt: entry.updatedAt || entry.createdAt || new Date().toISOString()
+  })).filter((entry) => entry.targetId && entry.content).slice(0, MAX_GM_NOTES);
+}
+
+function normalizePlatformEvents(entries) {
+  if (!Array.isArray(entries)) return [];
+  const types = new Set(["maintenance", "outage", "emergency", "suspension", "notice"]);
+  return entries.map((entry) => ({
+    id: entry.id || id("platform_event"),
+    type: types.has(entry.type) ? entry.type : "notice",
+    title: String(entry.title || "系统通知").trim().slice(0, 100),
+    message: String(entry.message || "").trim().slice(0, MAX_PLATFORM_EVENT_MESSAGE_LENGTH),
+    active: entry.active === true,
+    blocking: entry.blocking === true,
+    affectedActorIds: unique(Array.isArray(entry.affectedActorIds) ? entry.affectedActorIds.map(String) : []),
+    startsAt: entry.startsAt || new Date().toISOString(),
+    endsAt: String(entry.endsAt || "").trim(),
+    createdAt: entry.createdAt || new Date().toISOString(),
+    endedAt: String(entry.endedAt || "").trim()
+  })).slice(0, 100);
 }
 
 function defaultEmojis() {
@@ -1061,6 +1325,7 @@ function publicState(state, overrides = {}) {
   const adminView = overrides.adminView ?? context.adminView ?? false;
   const viewerId = String(overrides.viewerId ?? context.viewerId ?? "");
   const sanitizedCharacters = (state.characters || []).map(({ accessToken, auth, ...character }) => character);
+  const controls = normalizeSessionControl(state.settings?.sessionControl);
   const calendarDays = (state.calendarDays || []).map((day) => ({
     ...day,
     events: adminView
@@ -1077,27 +1342,44 @@ function publicState(state, overrides = {}) {
     };
   }
 
+  const hiddenAuthorIds = new Set();
+  if (viewerId) {
+    for (const entry of state.moderation || []) {
+      if (entry.actorId === viewerId && ["mute", "block"].includes(entry.type)) hiddenAuthorIds.add(entry.targetId);
+      if (entry.type === "block" && entry.targetId === viewerId) hiddenAuthorIds.add(entry.actorId);
+    }
+  }
   const chats = (state.chats || []).filter((chat) => (
     chat.isPublic === true || (viewerId && (chat.memberIds || []).includes(viewerId))
   ));
   const visibleChatIds = new Set(chats.map((chat) => chat.id));
   const messages = (state.messages || [])
-    .filter((message) => visibleChatIds.has(message.chatId))
+    .filter((message) => visibleChatIds.has(message.chatId) && !hiddenAuthorIds.has(message.authorId))
     .map((message) => {
       const viewerOwnsMessage = Boolean(viewerId && message.authorId === viewerId);
-      return message.isAnonymous
-        ? { ...message, authorId: "", viewerOwnsMessage }
-        : { ...message, viewerOwnsMessage };
+      const reactions = {};
+      for (const [reaction, actorIds] of Object.entries(message.reactions || {})) {
+        reactions[reaction] = {
+          count: actorIds.length,
+          viewerReacted: Boolean(viewerId && actorIds.includes(viewerId))
+        };
+      }
+      const safeMessage = { ...message, reactions, viewerOwnsMessage };
+      if (message.isAnonymous) safeMessage.authorId = "";
+      return safeMessage;
     });
-  const posts = (state.posts || []).map((post) => {
+  const posts = (state.posts || []).filter((post) => !hiddenAuthorIds.has(post.authorId)).map((post) => {
     const viewerOwnsPost = Boolean(viewerId && post.authorId === viewerId);
     const viewerHasLiked = Boolean(viewerId && (post.likedBy || []).includes(viewerId));
+    const viewerBookmarked = Boolean(viewerId && (state.bookmarks || []).some((entry) => entry.actorId === viewerId && entry.postId === post.id));
     const { likedBy, ...safePost } = post;
     return {
       ...safePost,
+      poll: publicPoll(post.poll, viewerId, false),
       authorId: post.isAnonymous ? "" : post.authorId,
       viewerOwnsPost,
       viewerHasLiked,
+      viewerBookmarked,
       replies: (post.replies || []).map((reply) => ({
         ...reply,
         authorId: reply.isAnonymous ? "" : reply.authorId,
@@ -1110,6 +1392,9 @@ function publicState(state, overrides = {}) {
         relationship.requesterId === viewerId || relationship.targetId === viewerId
       ))
     : [];
+  const socialGraph = (state.relationships || [])
+    .filter((relationship) => relationship.status === "accepted")
+    .map(({ requesterId, targetId, createdAt }) => ({ requesterId, targetId, createdAt }));
   const referencedCharacterIds = new Set([
     ...posts.map((post) => post.authorId),
     ...posts.flatMap((post) => (post.replies || []).map((reply) => reply.authorId)),
@@ -1118,9 +1403,33 @@ function publicState(state, overrides = {}) {
   ].filter(Boolean));
   const characters = sanitizedCharacters
     .filter((character) => character.active !== false || referencedCharacterIds.has(character.id))
-    .map(publicCharacterProfile);
+    .map((character) => publicCharacterProfile(character, state));
+  const publicSettings = {
+    ...state.settings,
+    sessionControl: {
+      readOnly: controls.readOnly,
+      timelineLocked: controls.timelineLocked,
+      chatLocked: controls.chatLocked,
+      signupEnabled: controls.signupEnabled,
+      slowModeSeconds: controls.slowModeSeconds,
+      messageEditWindowMinutes: controls.messageEditWindowMinutes,
+      lockedChatIds: controls.lockedChatIds,
+      viewerMuted: Boolean(viewerId && controls.mutedCharacterIds.includes(viewerId)),
+      announcement: controls.announcement
+    }
+  };
+  const visibleNotifications = viewerId
+    ? (state.notifications || []).filter((notification) => notification.recipientId === viewerId && !hiddenAuthorIds.has(notification.actorId))
+    : [];
+  const viewerModeration = viewerId
+    ? (state.moderation || []).filter((entry) => entry.actorId === viewerId)
+    : [];
+  const viewerBookmarks = viewerId
+    ? (state.bookmarks || []).filter((entry) => entry.actorId === viewerId).map(({ id: bookmarkId, postId, createdAt }) => ({ bookmarkId, postId, createdAt }))
+    : [];
+  const platformEvents = activePlatformEventsFor(state, viewerId);
   const sectionVersions = {};
-  for (const section of ["settings", "characters", "chats", "calendarDays", "posts", "messages", "bulletins", "emojis", "relationships"]) {
+  for (const section of ["settings", "characters", "chats", "calendarDays", "posts", "messages", "bulletins", "emojis", "relationships", "notifications", "presence", "moderation", "bookmarks", "platformEvents"]) {
     if (state.sectionVersions?.[section]) sectionVersions[section] = state.sectionVersions[section];
   }
 
@@ -1128,7 +1437,7 @@ function publicState(state, overrides = {}) {
     version: state.version,
     updatedAt: state.updatedAt,
     sectionVersions,
-    settings: state.settings,
+    settings: publicSettings,
     characters,
     chats,
     calendarDays,
@@ -1137,13 +1446,23 @@ function publicState(state, overrides = {}) {
     bulletins: (state.bulletins || []).filter((bulletin) => bulletin.isPublic !== false),
     emojis: (state.emojis || []).map(({ ownerId, ...emoji }) => emoji),
     relationships,
+    socialGraph,
+    notifications: visibleNotifications,
+    presence: state.presence || [],
+    moderation: viewerModeration,
+    bookmarks: viewerBookmarks,
+    platformEvents,
+    scheduledItems: [],
+    gmNotes: [],
+    systemStatus: {},
     chatMemberRequests: [],
     auditLog: [],
     undoStack: []
   };
 }
 
-function publicCharacterProfile(character) {
+function publicCharacterProfile(character, state) {
+  const relationships = state?.relationships || [];
   return {
     id: character.id,
     name: character.name,
@@ -1151,9 +1470,44 @@ function publicCharacterProfile(character) {
     color: character.color,
     avatarText: character.avatarText,
     avatarData: character.avatarData,
+    bannerData: character.bannerData,
+    bio: character.bio,
+    location: character.location,
+    birthday: character.birthday,
+    pinnedPostId: character.pinnedPostId,
+    profileHistory: character.profileHistory || [],
+    followerCount: relationships.filter((relationship) => relationship.status === "accepted" && relationship.targetId === character.id).length,
+    followingCount: relationships.filter((relationship) => relationship.status === "accepted" && relationship.requesterId === character.id).length,
     tags: (character.tags || []).filter((tag) => !isImmersionBreakingTag(tag)),
     active: character.active !== false
   };
+}
+
+function publicPoll(poll, viewerId, adminView) {
+  const normalized = normalizePoll(poll);
+  if (!normalized) return null;
+  return {
+    question: normalized.question,
+    multiple: normalized.multiple,
+    closed: normalized.closed,
+    closesAt: normalized.closesAt,
+    options: normalized.options.map((option) => ({
+      id: option.id,
+      text: option.text,
+      count: option.voterIds.length,
+      viewerVoted: Boolean(viewerId && option.voterIds.includes(viewerId)),
+      ...(adminView ? { voterIds: option.voterIds } : {})
+    }))
+  };
+}
+
+function activePlatformEventsFor(state, viewerId) {
+  const now = Date.now();
+  return (state.platformEvents || []).filter((event) => {
+    if (!event.active) return false;
+    if (event.endsAt && new Date(event.endsAt).getTime() <= now) return false;
+    return !(event.affectedActorIds || []).length || Boolean(viewerId && event.affectedActorIds.includes(viewerId));
+  });
 }
 
 function isImmersionBreakingTag(tag) {
@@ -1178,6 +1532,7 @@ function publicStatePatch(state, since, overrides = {}) {
     sectionVersions: view.sectionVersions
   };
   for (const section of changedSections) patch[section] = view[section];
+  if (changedSections.includes("relationships")) patch.socialGraph = view.socialGraph;
   return { changed: true, updatedAt: state.updatedAt, patch };
 }
 
@@ -1801,9 +2156,283 @@ function restoreLastUndo(state) {
   return entry;
 }
 
+function addNotification(state, recipientId, type, text, details = {}) {
+  if (!recipientId || !text || recipientId === details.actorId) return null;
+  state.notifications ||= [];
+  const notification = {
+    id: id("notification"),
+    recipientId,
+    actorId: String(details.actorId || ""),
+    type: String(type || "info"),
+    text: String(text).trim().slice(0, 500),
+    postId: String(details.postId || ""),
+    replyId: String(details.replyId || ""),
+    chatId: String(details.chatId || ""),
+    messageId: String(details.messageId || ""),
+    readAt: "",
+    createdAt: new Date().toISOString()
+  };
+  state.notifications.unshift(notification);
+  state.notifications = state.notifications.slice(0, MAX_NOTIFICATION_COUNT);
+  return notification;
+}
+
+function notifyMentions(state, text, actorId, details = {}) {
+  const tokens = unique(String(text || "").match(/@[\p{L}\p{N}_.!\-]{1,40}/gu) || []).map((token) => token.toLowerCase());
+  const recipients = [];
+  for (const token of tokens) {
+    const character = (state.characters || []).find((item) => item.active !== false && String(item.handle || "").toLowerCase() === token);
+    if (!character || character.id === actorId || recipients.includes(character.id)) continue;
+    recipients.push(character.id);
+    addNotification(state, character.id, "mention", `${findCharacter(state, actorId)?.name || "有人"} 提到了你`, { ...details, actorId });
+  }
+  return recipients;
+}
+
+function notifyChatMembers(state, chat, author, message, isAnonymous) {
+  for (const memberId of chat.memberIds || []) {
+    if (memberId === author.id) continue;
+    if (isBlockedBetween(state, author.id, memberId)) continue;
+    const recipient = findCharacter(state, memberId);
+    if (!recipient || recipient.type !== "account") continue;
+    addNotification(state, memberId, "message", `${isAnonymous ? "匿名账号" : author.name} 在「${chat.name}」发送了消息`, {
+      actorId: isAnonymous ? "" : author.id,
+      chatId: chat.id,
+      messageId: message.id
+    });
+  }
+  notifyMentions(state, message.content, isAnonymous ? "" : author.id, { chatId: chat.id, messageId: message.id });
+}
+
+function isBlockedBetween(state, firstId, secondId) {
+  return (state.moderation || []).some((entry) => entry.type === "block" && (
+    (entry.actorId === firstId && entry.targetId === secondId) ||
+    (entry.actorId === secondId && entry.targetId === firstId)
+  ));
+}
+
+function enforceSessionControl(req, res, state, scope, actor, chatId = "", applySlowMode = true) {
+  if (isAdmin(req)) return true;
+  const blockingEvent = activePlatformEventsFor(state, actor?.id || "").find((event) => event.blocking);
+  if (blockingEvent) {
+    sendJson(res, 423, { error: blockingEvent.message || "The platform is temporarily unavailable." });
+    return false;
+  }
+  const controls = normalizeSessionControl(state.settings?.sessionControl);
+  if (controls.readOnly || (scope === "timeline" && controls.timelineLocked) || (scope === "chat" && controls.chatLocked)) {
+    sendJson(res, 423, { error: "The GM has temporarily made this part of the platform read-only." });
+    return false;
+  }
+  if (actor && controls.mutedCharacterIds.includes(actor.id)) {
+    sendJson(res, 423, { error: "This account has been temporarily muted by the GM." });
+    return false;
+  }
+  if (scope === "chat" && chatId && controls.lockedChatIds.includes(chatId)) {
+    sendJson(res, 423, { error: "This chat has been temporarily locked by the GM." });
+    return false;
+  }
+  if (applySlowMode && actor && controls.slowModeSeconds > 0) {
+    const key = `${scope}:${actor.id}`;
+    const now = Date.now();
+    const last = slowModeActivity.get(key) || 0;
+    const waitMs = controls.slowModeSeconds * 1000 - (now - last);
+    if (waitMs > 0) {
+      sendJson(res, 429, { error: `Slow mode is active. Try again in ${Math.ceil(waitMs / 1000)} seconds.` });
+      return false;
+    }
+    slowModeActivity.set(key, now);
+  }
+  return true;
+}
+
+function messageWithinEditWindow(state, message) {
+  const minutes = Math.max(0, Number(state.settings?.sessionControl?.messageEditWindowMinutes || DEFAULT_MESSAGE_EDIT_WINDOW_MINUTES));
+  if (!minutes) return false;
+  const createdAt = new Date(message.createdAt).getTime();
+  return Number.isFinite(createdAt) && Date.now() - createdAt <= minutes * 60 * 1000;
+}
+
+function isScheduledItemDue(state, item) {
+  if (item.status !== "pending") return false;
+  const currentKey = buildTimelineSortKey(state, state.settings.currentDayId, state.settings.gameTime);
+  const itemKey = buildTimelineSortKey(state, item.dayId, item.gameTime);
+  return currentKey !== null && itemKey !== null && itemKey <= currentKey;
+}
+
+function executeScheduledItem(state, item) {
+  const payload = item.payload || {};
+  const now = new Date().toISOString();
+  if (item.type === "post") {
+    const author = findCharacter(state, payload.authorId);
+    if (!author) throw new Error("Scheduled post author no longer exists.");
+    const post = {
+      id: id("post"),
+      authorId: author.id,
+      content: String(payload.content || "").trim(),
+      attachment: payload.attachment || null,
+      isAnonymous: payload.isAnonymous === true,
+      dayId: item.dayId,
+      gameTime: item.gameTime,
+      timelineSortKey: buildTimelineSortKey(state, item.dayId, item.gameTime),
+      createdAt: now,
+      metrics: normalizeMetrics(payload.metrics),
+      likedBy: [],
+      repostOfPostId: String(payload.repostOfPostId || ""),
+      quotePostId: String(payload.quotePostId || ""),
+      poll: normalizePoll(payload.poll),
+      replies: []
+    };
+    state.posts.push(post);
+    notifyMentions(state, post.content, post.isAnonymous ? "" : author.id, { postId: post.id });
+    return ["posts", "notifications"];
+  }
+  if (item.type === "message") {
+    const author = findCharacter(state, payload.authorId);
+    const chat = state.chats.find((entry) => entry.id === payload.chatId);
+    if (!author || !chat) throw new Error("Scheduled message author or chat no longer exists.");
+    const message = {
+      id: id("msg"),
+      chatId: chat.id,
+      authorId: author.id,
+      isAnonymous: payload.isAnonymous === true,
+      content: String(payload.content || "").trim(),
+      attachment: payload.attachment || null,
+      replyToMessageId: String(payload.replyToMessageId || ""),
+      reactions: {},
+      gameTime: item.gameTime,
+      createdAt: now
+    };
+    state.messages.push(message);
+    notifyChatMembers(state, chat, author, message, message.isAnonymous);
+    return ["messages", "notifications"];
+  }
+  if (item.type === "bulletin") {
+    state.bulletins.unshift({
+      id: id("bulletin"),
+      type: normalizeBulletinType(payload.type),
+      title: String(payload.title || "Untitled bulletin").trim(),
+      content: String(payload.content || "").trim(),
+      authorId: findCharacter(state, payload.authorId)?.id || "",
+      dayId: item.dayId,
+      gameTime: item.gameTime,
+      isPublic: payload.isPublic !== false,
+      sourceEventId: "",
+      createdAt: now,
+      updatedAt: now
+    });
+    return ["bulletins"];
+  }
+  if (item.type === "platform_event") {
+    state.platformEvents.unshift(normalizePlatformEvents([{ ...payload, active: true, startsAt: now }])[0]);
+    return ["platformEvents"];
+  }
+  throw new Error("Unsupported scheduled item type.");
+}
+
+function processTemporalState(state) {
+  const changed = new Set();
+  const now = Date.now();
+  for (const event of state.platformEvents || []) {
+    if (event.active && event.endsAt && new Date(event.endsAt).getTime() <= now) {
+      event.active = false;
+      event.endedAt = new Date().toISOString();
+      changed.add("platformEvents");
+    }
+  }
+  for (const item of state.scheduledItems || []) {
+    if (!isScheduledItemDue(state, item)) continue;
+    try {
+      for (const section of executeScheduledItem(state, item)) changed.add(section);
+      item.status = "completed";
+      item.executedAt = new Date().toISOString();
+      item.error = "";
+      addNotification(state, GM_NOTIFICATION_RECIPIENT, "schedule", `已发布计划项目：${item.type}`, {});
+      changed.add("notifications");
+    } catch (error) {
+      item.status = "failed";
+      item.error = String(error.message || error).slice(0, 500);
+      addNotification(state, GM_NOTIFICATION_RECIPIENT, "schedule_error", `计划项目失败：${item.error}`, {});
+      changed.add("notifications");
+    }
+    changed.add("scheduledItems");
+  }
+  return [...changed];
+}
+
+function offsiteBackupTargetUrl() {
+  const now = new Date();
+  return OFFSITE_BACKUP_URL
+    .replaceAll("{date}", now.toISOString().slice(0, 10))
+    .replaceAll("{timestamp}", now.toISOString().replace(/[:.]/g, "-"));
+}
+
+async function runOffsiteBackup(trigger = "manual") {
+  if (!OFFSITE_BACKUP_URL) {
+    const error = new Error("OFFSITE_BACKUP_URL is not configured.");
+    error.statusCode = 400;
+    throw error;
+  }
+  if (offsiteBackupInFlight) return offsiteBackupInFlight;
+  offsiteBackupInFlight = (async () => {
+    const state = readState();
+    state.systemStatus = normalizeSystemStatus(state.systemStatus);
+    state.systemStatus.offsiteBackup.lastAttemptAt = new Date().toISOString();
+    state.systemStatus.offsiteBackup.lastError = "";
+    writeState(state, ["systemStatus"]);
+    const payload = Buffer.from(JSON.stringify(exportBackupBundle(state)));
+    const compressed = zlib.gzipSync(payload, { level: 6 });
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 60000);
+    try {
+      const headers = {
+        "Content-Type": "application/json",
+        "Content-Encoding": "gzip",
+        "X-Kunibayashi-Backup-Trigger": trigger
+      };
+      if (OFFSITE_BACKUP_TOKEN) headers.Authorization = `Bearer ${OFFSITE_BACKUP_TOKEN}`;
+      const response = await fetch(offsiteBackupTargetUrl(), {
+        method: OFFSITE_BACKUP_METHOD,
+        headers,
+        body: compressed,
+        signal: controller.signal
+      });
+      if (!response.ok) throw new Error(`Remote backup returned HTTP ${response.status}.`);
+      const current = readState();
+      current.systemStatus = normalizeSystemStatus(current.systemStatus);
+      current.systemStatus.offsiteBackup.lastSuccessAt = new Date().toISOString();
+      current.systemStatus.offsiteBackup.lastError = "";
+      writeState(current, ["systemStatus"]);
+      return current.systemStatus.offsiteBackup;
+    } catch (error) {
+      const current = readState();
+      current.systemStatus = normalizeSystemStatus(current.systemStatus);
+      current.systemStatus.offsiteBackup.lastError = String(error.message || error).slice(0, 500);
+      writeState(current, ["systemStatus"]);
+      throw error;
+    } finally {
+      clearTimeout(timeout);
+    }
+  })().finally(() => {
+    offsiteBackupInFlight = null;
+  });
+  return offsiteBackupInFlight;
+}
+
+function configureOffsiteBackupTimer() {
+  if (offsiteBackupTimer) clearInterval(offsiteBackupTimer);
+  offsiteBackupTimer = null;
+  if (!OFFSITE_BACKUP_URL || OFFSITE_BACKUP_INTERVAL_MINUTES <= 0) return;
+  offsiteBackupTimer = setInterval(() => {
+    runOffsiteBackup("automatic").catch((error) => console.error(`Automatic off-site backup failed: ${error.message}`));
+  }, OFFSITE_BACKUP_INTERVAL_MINUTES * 60 * 1000);
+  offsiteBackupTimer.unref?.();
+}
+
 async function routeApi(req, res, url) {
   const state = readState();
   configureRequestView(req, state);
+  const temporalSections = processTemporalState(state);
+  if (temporalSections.length) writeState(state, temporalSections);
 
   if (req.method === "GET" && url.pathname === "/api/state") {
     const since = String(url.searchParams.get("since") || "");
@@ -1852,8 +2481,211 @@ async function routeApi(req, res, url) {
     return;
   }
 
+  if (req.method === "GET" && url.pathname === "/api/gm/offsite-backup/status") {
+    if (!requireAdmin(req, res)) return;
+    sendJson(res, 200, normalizeSystemStatus(state.systemStatus).offsiteBackup);
+    return;
+  }
+
   const maxBodyBytes = url.pathname === "/api/gm/restore" ? MAX_BACKUP_BODY_BYTES : MAX_JSON_BODY_BYTES;
   const body = ["POST", "PATCH", "DELETE"].includes(req.method) ? await readBody(req, maxBodyBytes) : {};
+
+  if (req.method === "POST" && url.pathname === "/api/gm/offsite-backup") {
+    if (!requireAdmin(req, res)) return;
+    try {
+      const status = await runOffsiteBackup("manual");
+      sendJson(res, 200, { ok: true, status });
+    } catch (error) {
+      sendJson(res, Number(error.statusCode) || 502, { error: error.message || "Off-site backup failed." });
+    }
+    return;
+  }
+
+  if (req.method === "PATCH" && url.pathname === "/api/gm/session-control") {
+    if (!requireAdmin(req, res)) return;
+    const next = normalizeSessionControl({ ...state.settings.sessionControl, ...body });
+    pushUndo(state, "session_control", "更新会话控制", ["settings"], {});
+    state.settings.sessionControl = next;
+    writeState(state, ["settings", "undoStack", "auditLog"]);
+    sendJson(res, 200, publicState(state));
+    return;
+  }
+
+  if (req.method === "PATCH" && url.pathname.startsWith("/api/gm/presence/")) {
+    if (!requireAdmin(req, res)) return;
+    const characterId = decodeURIComponent(url.pathname.split("/").pop());
+    const character = findCharacter(state, characterId);
+    if (!character) return sendJson(res, 404, { error: "Character not found." });
+    const existing = state.presence.find((entry) => entry.characterId === character.id) || { characterId: character.id };
+    const next = normalizePresence([{ ...existing, ...body, characterId: character.id, updatedAt: new Date().toISOString() }], [character])[0];
+    state.presence = state.presence.filter((entry) => entry.characterId !== character.id);
+    state.presence.push(next);
+    writeState(state, ["presence"]);
+    sendJson(res, 200, publicState(state));
+    return;
+  }
+
+  if (req.method === "POST" && url.pathname === "/api/gm/platform-events") {
+    if (!requireAdmin(req, res)) return;
+    const event = normalizePlatformEvents([{
+      ...body,
+      id: id("platform_event"),
+      active: body.active !== false,
+      startsAt: new Date().toISOString(),
+      createdAt: new Date().toISOString()
+    }])[0];
+    if (!event.message && !event.title) return sendJson(res, 400, { error: "Platform event title or message is required." });
+    pushUndo(state, "create_platform_event", `创建平台事件：${event.title}`, ["platformEvents"], { eventId: event.id });
+    state.platformEvents.unshift(event);
+    writeState(state, ["platformEvents", "undoStack", "auditLog"]);
+    sendJson(res, 201, publicState(state));
+    return;
+  }
+
+  const platformEventMatch = url.pathname.match(/^\/api\/gm\/platform-events\/([^/]+)$/);
+  if (platformEventMatch) {
+    if (!requireAdmin(req, res)) return;
+    const eventId = decodeURIComponent(platformEventMatch[1]);
+    const event = state.platformEvents.find((entry) => entry.id === eventId);
+    if (!event) return sendJson(res, 404, { error: "Platform event not found." });
+    if (req.method === "PATCH") {
+      pushUndo(state, "edit_platform_event", `编辑平台事件：${event.title}`, ["platformEvents"], { eventId });
+      const normalized = normalizePlatformEvents([{ ...event, ...body, id: event.id }])[0];
+      Object.assign(event, normalized);
+      if (body.active === false) event.endedAt = new Date().toISOString();
+      writeState(state, ["platformEvents", "undoStack", "auditLog"]);
+      sendJson(res, 200, publicState(state));
+      return;
+    }
+    if (req.method === "DELETE") {
+      pushUndo(state, "delete_platform_event", `删除平台事件：${event.title}`, ["platformEvents"], { eventId });
+      state.platformEvents = state.platformEvents.filter((entry) => entry.id !== eventId);
+      writeState(state, ["platformEvents", "undoStack", "auditLog"]);
+      sendJson(res, 200, publicState(state));
+      return;
+    }
+  }
+
+  if (req.method === "POST" && url.pathname === "/api/gm/scheduled-items") {
+    if (!requireAdmin(req, res)) return;
+    if ((state.scheduledItems || []).filter((item) => item.status === "pending").length >= MAX_SCHEDULED_ITEMS) {
+      return sendJson(res, 400, { error: "Scheduled queue is full." });
+    }
+    const type = ["post", "message", "bulletin", "platform_event"].includes(body.type) ? body.type : "post";
+    const dayId = resolveTimelineDayId(state, body.dayId || state.settings.currentDayId);
+    const gameTime = String(body.gameTime || state.settings.gameTime).trim();
+    if (!dayId || parseGameTimeMinutes(gameTime) === null) return sendJson(res, 400, { error: "A valid calendar day and time are required." });
+    const payload = body.payload && typeof body.payload === "object" ? JSON.parse(JSON.stringify(body.payload)) : {};
+    if (["post", "message"].includes(type) && !findCharacter(state, payload.authorId)) return sendJson(res, 400, { error: "Scheduled author not found." });
+    if (type === "message" && !state.chats.some((chat) => chat.id === payload.chatId)) return sendJson(res, 400, { error: "Scheduled chat not found." });
+    if (type === "post" && String(payload.content || "").length > MAX_POST_CONTENT_LENGTH) return sendJson(res, 400, { error: "Scheduled post is too long." });
+    if (type === "message" && String(payload.content || "").length > MAX_MESSAGE_CONTENT_LENGTH) return sendJson(res, 400, { error: "Scheduled message is too long." });
+    if (type === "bulletin" && (String(payload.title || "").length > MAX_BULLETIN_TITLE_LENGTH || String(payload.content || "").length > MAX_BULLETIN_CONTENT_LENGTH)) return sendJson(res, 400, { error: "Scheduled bulletin is too long." });
+    if (payload.attachment?.dataUrl?.startsWith("data:image/")) {
+      try {
+        payload.attachment.dataUrl = persistImageDataUrl(payload.attachment.dataUrl, type === "message" ? MAX_CHAT_IMAGE_DATA_URL_LENGTH : MAX_POST_IMAGE_DATA_URL_LENGTH, "Scheduled image");
+      } catch (error) {
+        return sendJson(res, 400, { error: error.message });
+      }
+    }
+    if (type === "post") payload.poll = normalizePoll(payload.poll);
+    if (type === "post" && !String(payload.content || "").trim() && !payload.attachment && !payload.poll) return sendJson(res, 400, { error: "Scheduled post content, image, or poll is required." });
+    if (type === "message" && !String(payload.content || "").trim() && !payload.attachment) return sendJson(res, 400, { error: "Scheduled message content or image is required." });
+    if (type === "bulletin" && !String(payload.title || "").trim() && !String(payload.content || "").trim()) return sendJson(res, 400, { error: "Scheduled bulletin title or content is required." });
+    if (type === "platform_event" && !String(payload.title || "").trim() && !String(payload.message || "").trim()) return sendJson(res, 400, { error: "Scheduled platform event title or message is required." });
+    const item = normalizeScheduledItems([{
+      id: id("scheduled"),
+      type,
+      dayId,
+      gameTime,
+      payload,
+      status: "pending",
+      createdAt: new Date().toISOString()
+    }])[0];
+    pushUndo(state, "create_scheduled_item", `创建计划项目：${type}`, ["scheduledItems"], { itemId: item.id });
+    state.scheduledItems.unshift(item);
+    writeState(state, ["scheduledItems", "undoStack", "auditLog"]);
+    sendJson(res, 201, publicState(state));
+    return;
+  }
+
+  const scheduledItemMatch = url.pathname.match(/^\/api\/gm\/scheduled-items\/([^/]+)(?:\/(run))?$/);
+  if (scheduledItemMatch) {
+    if (!requireAdmin(req, res)) return;
+    const itemId = decodeURIComponent(scheduledItemMatch[1]);
+    const action = scheduledItemMatch[2];
+    const item = state.scheduledItems.find((entry) => entry.id === itemId);
+    if (!item) return sendJson(res, 404, { error: "Scheduled item not found." });
+    if (req.method === "POST" && action === "run") {
+      if (item.status !== "pending") return sendJson(res, 400, { error: "Only pending items can be run." });
+      const sections = executeScheduledItem(state, item);
+      item.status = "completed";
+      item.executedAt = new Date().toISOString();
+      pushAudit(state, "run_scheduled_item", `立即执行计划项目：${item.type}`, { itemId });
+      writeState(state, [...sections, "scheduledItems", "auditLog"]);
+      sendJson(res, 200, publicState(state));
+      return;
+    }
+    if (req.method === "PATCH") {
+      if (!["pending", "cancelled"].includes(body.status)) return sendJson(res, 400, { error: "Status must be pending or cancelled." });
+      item.status = body.status;
+      item.error = "";
+      pushAudit(state, "update_scheduled_item", `计划项目状态：${body.status}`, { itemId });
+      writeState(state, ["scheduledItems", "auditLog"]);
+      sendJson(res, 200, publicState(state));
+      return;
+    }
+    if (req.method === "DELETE") {
+      state.scheduledItems = state.scheduledItems.filter((entry) => entry.id !== itemId);
+      pushAudit(state, "delete_scheduled_item", `删除计划项目：${item.type}`, { itemId });
+      writeState(state, ["scheduledItems", "auditLog"]);
+      sendJson(res, 200, publicState(state));
+      return;
+    }
+  }
+
+  if (req.method === "POST" && url.pathname === "/api/gm/notes") {
+    if (!requireAdmin(req, res)) return;
+    const targetType = ["character", "post", "chat"].includes(body.targetType) ? body.targetType : "character";
+    const targetId = String(body.targetId || "").trim();
+    const content = String(body.content || "").trim();
+    if (!targetId || !content) return sendJson(res, 400, { error: "Note target and content are required." });
+    let note = state.gmNotes.find((entry) => entry.targetType === targetType && entry.targetId === targetId);
+    if (note) {
+      note.content = content.slice(0, MAX_GM_NOTE_LENGTH);
+      note.updatedAt = new Date().toISOString();
+    } else {
+      note = normalizeGmNotes([{ id: id("gm_note"), targetType, targetId, content }])[0];
+      state.gmNotes.unshift(note);
+    }
+    writeState(state, ["gmNotes"]);
+    sendJson(res, 200, publicState(state));
+    return;
+  }
+
+  if (req.method === "DELETE" && url.pathname.startsWith("/api/gm/notes/")) {
+    if (!requireAdmin(req, res)) return;
+    const noteId = decodeURIComponent(url.pathname.split("/").pop());
+    state.gmNotes = state.gmNotes.filter((entry) => entry.id !== noteId);
+    writeState(state, ["gmNotes"]);
+    sendJson(res, 200, publicState(state));
+    return;
+  }
+
+  if (req.method === "PATCH" && url.pathname === "/api/notifications/read") {
+    const recipientId = isAdmin(req) && body.recipientId === GM_NOTIFICATION_RECIPIENT
+      ? GM_NOTIFICATION_RECIPIENT
+      : authorizeAuthor(req, res, state, body.actorId)?.id;
+    if (!recipientId) return;
+    const ids = new Set(Array.isArray(body.ids) ? body.ids.map(String) : []);
+    const readAt = new Date().toISOString();
+    for (const notification of state.notifications || []) {
+      if (notification.recipientId === recipientId && (body.all === true || ids.has(notification.id))) notification.readAt = readAt;
+    }
+    writeState(state, ["notifications"]);
+    sendJson(res, 200, publicState(state));
+    return;
+  }
 
   if (req.method === "POST" && url.pathname === "/api/gm/restore") {
     if (!requireAdmin(req, res)) return;
@@ -2011,6 +2843,9 @@ async function routeApi(req, res, url) {
 
   if (req.method === "POST" && url.pathname === "/api/player-accounts") {
     const gmCreated = isAdmin(req);
+    if (!gmCreated && normalizeSessionControl(state.settings.sessionControl).signupEnabled === false) {
+      return sendJson(res, 423, { error: "New account registration is temporarily disabled." });
+    }
     if (!gmCreated && !requireRateLimit(req, res, "account-create", 8, 60 * 60 * 1000)) return;
     const built = buildPlayerAccount(state, body, gmCreated);
     if (built.error) return sendJson(res, built.status, { error: built.error });
@@ -2115,9 +2950,42 @@ async function routeApi(req, res, url) {
         return sendJson(res, 400, { error: error.message });
       }
     }
+    if (body.bannerData !== undefined) {
+      try {
+        updates.bannerData = body.bannerData
+          ? persistImageDataUrl(body.bannerData, MAX_POST_IMAGE_DATA_URL_LENGTH, "Profile banner")
+          : "";
+      } catch (error) {
+        return sendJson(res, 400, { error: error.message });
+      }
+    }
+    if (body.bio !== undefined) {
+      const bio = String(body.bio || "").trim();
+      if (bio.length > MAX_PROFILE_BIO_LENGTH) return sendJson(res, 400, { error: `Profile bio can be up to ${MAX_PROFILE_BIO_LENGTH} characters.` });
+      updates.bio = bio;
+    }
+    for (const field of ["location", "birthday"]) {
+      if (body[field] === undefined) continue;
+      const value = String(body[field] || "").trim();
+      if (value.length > MAX_PROFILE_FIELD_LENGTH) return sendJson(res, 400, { error: `${field} is too long.` });
+      updates[field] = value;
+    }
+    if (body.pinnedPostId !== undefined) {
+      const pinnedPostId = String(body.pinnedPostId || "").trim();
+      if (pinnedPostId && !state.posts.some((post) => post.id === pinnedPostId && post.authorId === character.id)) {
+        return sendJson(res, 400, { error: "Pinned post must belong to this profile." });
+      }
+      updates.pinnedPostId = pinnedPostId;
+    }
 
     if (isAdmin(req)) {
       pushUndo(state, "edit_player_account", `编辑玩家账号：${character.name}`, ["characters"], { accountId: character.id });
+    }
+    if ((updates.name && updates.name !== character.name) || (updates.handle && updates.handle !== character.handle)) {
+      character.profileHistory = normalizeProfileHistory([
+        { name: character.name, handle: character.handle, changedAt: new Date().toISOString() },
+        ...(character.profileHistory || [])
+      ]);
     }
     Object.assign(character, updates);
     writeState(state, ["characters", ...(isAdmin(req) ? ["undoStack", "auditLog"] : [])]);
@@ -2546,6 +3414,33 @@ async function routeApi(req, res, url) {
         return sendJson(res, 400, { error: error.message });
       }
     }
+    if (body.bannerData !== undefined) {
+      try {
+        updates.bannerData = body.bannerData
+          ? persistImageDataUrl(body.bannerData, MAX_POST_IMAGE_DATA_URL_LENGTH, "Profile banner")
+          : "";
+      } catch (error) {
+        return sendJson(res, 400, { error: error.message });
+      }
+    }
+    if (body.bio !== undefined) {
+      const bio = String(body.bio || "").trim();
+      if (bio.length > MAX_PROFILE_BIO_LENGTH) return sendJson(res, 400, { error: `Profile bio can be up to ${MAX_PROFILE_BIO_LENGTH} characters.` });
+      updates.bio = bio;
+    }
+    for (const field of ["location", "birthday"]) {
+      if (body[field] === undefined) continue;
+      const value = String(body[field] || "").trim();
+      if (value.length > MAX_PROFILE_FIELD_LENGTH) return sendJson(res, 400, { error: `${field} is too long.` });
+      updates[field] = value;
+    }
+    if (body.pinnedPostId !== undefined) {
+      const pinnedPostId = String(body.pinnedPostId || "").trim();
+      if (pinnedPostId && !state.posts.some((post) => post.id === pinnedPostId && post.authorId === character.id)) {
+        return sendJson(res, 400, { error: "Pinned post must belong to this profile." });
+      }
+      updates.pinnedPostId = pinnedPostId;
+    }
     if (body.note !== undefined) {
       const note = String(body.note).trim();
       if (note.length > MAX_CHARACTER_NOTE_LENGTH) return sendJson(res, 400, { error: `Character note can be up to ${MAX_CHARACTER_NOTE_LENGTH} characters.` });
@@ -2554,8 +3449,31 @@ async function routeApi(req, res, url) {
     if (body.tags !== undefined) updates.tags = normalizeTags(body.tags);
     if (body.active !== undefined) updates.active = Boolean(body.active);
     pushUndo(state, "edit_character", `编辑角色：${character.name}`, ["characters"], { characterId });
+    if ((updates.name && updates.name !== character.name) || (updates.handle && updates.handle !== character.handle)) {
+      character.profileHistory = normalizeProfileHistory([
+        { name: character.name, handle: character.handle, changedAt: new Date().toISOString() },
+        ...(character.profileHistory || [])
+      ]);
+    }
     Object.assign(character, updates);
     writeState(state, ["characters", "undoStack", "auditLog"]);
+    sendJson(res, 200, publicState(state));
+    return;
+  }
+
+  if (req.method === "POST" && url.pathname === "/api/moderation") {
+    const actor = authorizeAuthor(req, res, state, body.actorId);
+    const target = findCharacter(state, body.targetId);
+    if (!actor) return;
+    if (!target || target.id === actor.id) return sendJson(res, 400, { error: "Choose another account." });
+    const type = body.type === "block" ? "block" : "mute";
+    const existing = state.moderation.find((entry) => entry.actorId === actor.id && entry.targetId === target.id && entry.type === type);
+    if (existing) {
+      state.moderation = state.moderation.filter((entry) => entry.id !== existing.id);
+    } else {
+      state.moderation.push({ id: id("moderation"), actorId: actor.id, targetId: target.id, type, createdAt: new Date().toISOString() });
+    }
+    writeState(state, ["moderation"]);
     sendJson(res, 200, publicState(state));
     return;
   }
@@ -2566,6 +3484,7 @@ async function routeApi(req, res, url) {
     if (!requester) return;
     if (!target) return sendJson(res, 400, { error: "Target account not found." });
     if (requester.id === target.id) return sendJson(res, 400, { error: "You cannot follow yourself." });
+    if (isBlockedBetween(state, requester.id, target.id)) return sendJson(res, 403, { error: "This follow request is not available." });
 
     const existing = state.relationships.find((relationship) => (
       relationship.requesterId === requester.id &&
@@ -2585,7 +3504,9 @@ async function routeApi(req, res, url) {
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString()
     });
-    writeState(state, ["relationships"]);
+    addNotification(state, GM_NOTIFICATION_RECIPIENT, "follow_request", `${requester.name} 请求关注 ${target.name}`, { actorId: requester.id });
+    addNotification(state, target.id, "follow_request", `${requester.name} 请求关注你，正在等待 GM 审批`, { actorId: requester.id });
+    writeState(state, ["relationships", "notifications"]);
     sendJson(res, 201, publicState(state));
     return;
   }
@@ -2601,7 +3522,11 @@ async function routeApi(req, res, url) {
     pushUndo(state, "update_follow", `Set follow ${body.status}`, ["relationships"], { relationshipId });
     relationship.status = body.status;
     relationship.updatedAt = new Date().toISOString();
-    writeState(state, ["relationships", "undoStack", "auditLog"]);
+    const requester = findCharacter(state, relationship.requesterId);
+    const target = findCharacter(state, relationship.targetId);
+    addNotification(state, relationship.requesterId, "follow_update", `${target?.name || "对方"} 的关注请求已${body.status === "accepted" ? "批准" : "拒绝"}`, { actorId: relationship.targetId });
+    if (body.status === "accepted") addNotification(state, relationship.targetId, "follow_update", `你与 ${requester?.name || "对方"} 现在可以私信`, { actorId: relationship.requesterId });
+    writeState(state, ["relationships", "notifications", "undoStack", "auditLog"]);
     sendJson(res, 200, publicState(state));
     return;
   }
@@ -2612,6 +3537,7 @@ async function routeApi(req, res, url) {
     if (!requester) return;
     if (!target) return sendJson(res, 400, { error: "Target account not found." });
     if (requester.id === target.id) return sendJson(res, 400, { error: "Choose another account for a direct chat." });
+    if (isBlockedBetween(state, requester.id, target.id)) return sendJson(res, 403, { error: "Private messages are unavailable between these accounts." });
     if (!isAdmin(req) && !canDirectMessage(state, requester.id, target.id)) {
       return sendJson(res, 403, { error: "GM must approve the follow request before private messages are allowed." });
     }
@@ -2649,7 +3575,7 @@ async function routeApi(req, res, url) {
     if (invalidMember) return sendJson(res, 400, { error: "One or more chat members could not be found." });
 
     if (!isAdmin(req)) {
-      const blockedMember = memberIds.find((memberId) => memberId !== creator.id && !canDirectMessage(state, creator.id, memberId));
+      const blockedMember = memberIds.find((memberId) => memberId !== creator.id && (!canDirectMessage(state, creator.id, memberId) || isBlockedBetween(state, creator.id, memberId)));
       if (blockedMember) {
         return sendJson(res, 403, { error: "GM must approve follows before those accounts can join a private chat." });
       }
@@ -2694,6 +3620,7 @@ async function routeApi(req, res, url) {
 
     const allowed = canRequestChatMemberChange(req, state, chat, requester, target, action);
     if (!allowed.ok) return sendJson(res, allowed.status, { error: allowed.error });
+    if (action === "add" && isBlockedBetween(state, requester.id, target.id)) return sendJson(res, 403, { error: "That account cannot be invited." });
 
     const existing = (state.chatMemberRequests || []).find((request) => (
       request.chatId === chat.id &&
@@ -2717,7 +3644,8 @@ async function routeApi(req, res, url) {
       updatedAt: new Date().toISOString()
     };
     state.chatMemberRequests.push(request);
-    writeState(state, ["chatMemberRequests"]);
+    addNotification(state, GM_NOTIFICATION_RECIPIENT, "chat_member_request", `${requester.name} 申请在「${chat.name}」${action === "add" ? "邀请" : "移除"}${target.name}`, { actorId: requester.id, chatId: chat.id });
+    writeState(state, ["chatMemberRequests", "notifications"]);
     sendJson(res, 201, { state: publicState(state), requestId: request.id });
     return;
   }
@@ -2754,7 +3682,9 @@ async function routeApi(req, res, url) {
         chat.memberIds = chat.memberIds.filter((memberId) => memberId !== request.targetId);
       }
     }
-    writeState(state, ["chats", "messages", "chatMemberRequests", "undoStack", "auditLog"]);
+    addNotification(state, request.requesterId, "chat_member_update", `群聊「${chat.name}」的${actionLabel}申请已${body.status === "accepted" ? "批准" : "拒绝"}`, { chatId: chat.id });
+    if (body.status === "accepted" && request.action === "add") addNotification(state, request.targetId, "chat_invite", `你已加入群聊「${chat.name}」`, { chatId: chat.id });
+    writeState(state, ["chats", "messages", "chatMemberRequests", "notifications", "undoStack", "auditLog"]);
     sendJson(res, 200, publicState(state));
     return;
   }
@@ -2763,6 +3693,7 @@ async function routeApi(req, res, url) {
     const author = authorizeAuthor(req, res, state, body.authorId);
     const content = String(body.content || "").trim();
     if (!author) return;
+    if (!enforceSessionControl(req, res, state, "timeline", author)) return;
     if (!requireRateLimit(req, res, `timeline-post-${author.id}`, 30, 10 * 60 * 1000)) return;
     if (content.length > MAX_POST_CONTENT_LENGTH) return sendJson(res, 400, { error: `Post content can be up to ${MAX_POST_CONTENT_LENGTH} characters.` });
 
@@ -2779,7 +3710,9 @@ async function routeApi(req, res, url) {
       }
     }
 
-    if (!content && !attachment) return sendJson(res, 400, { error: "Post content or image is required." });
+    const poll = normalizePoll(body.poll);
+    if (body.poll && !poll) return sendJson(res, 400, { error: "A poll needs a question and at least two options." });
+    if (!content && !attachment && !poll) return sendJson(res, 400, { error: "Post content, image, or poll is required." });
     const requestedDayId = body.dayId !== undefined ? resolveTimelineDayId(state, body.dayId) : "";
     if (body.dayId && !requestedDayId) return sendJson(res, 400, { error: "Timeline day was not found." });
     const explicitGameTime = body.gameTime !== undefined ? String(body.gameTime || "").trim() : "";
@@ -2790,7 +3723,7 @@ async function routeApi(req, res, url) {
     const gameTime = explicitGameTime || String(state.settings.gameTime).trim();
     const createdAt = new Date().toISOString();
     if (isAdmin(req)) pushUndo(state, "create_post", `以 ${author.name} 发布帖子`, ["posts"], { authorId: author.id });
-    state.posts.push({
+    const post = {
       id: id("post"),
       authorId: author.id,
       content,
@@ -2801,9 +3734,15 @@ async function routeApi(req, res, url) {
       timelineSortKey: buildTimelineSortKey(state, dayId, gameTime),
       createdAt,
       metrics: normalizeMetrics(body.metrics),
+      likedBy: [],
+      repostOfPostId: "",
+      quotePostId: "",
+      poll,
       replies: []
-    });
-    writeState(state, ["posts", ...(didAutoAdvance ? ["settings"] : []), ...(isAdmin(req) ? ["undoStack", "auditLog"] : [])]);
+    };
+    state.posts.push(post);
+    notifyMentions(state, post.content, post.isAnonymous ? "" : author.id, { postId: post.id });
+    writeState(state, ["posts", "notifications", ...(didAutoAdvance ? ["settings"] : []), ...(isAdmin(req) ? ["undoStack", "auditLog"] : [])]);
     sendJson(res, 201, publicState(state));
     return;
   }
@@ -2844,6 +3783,7 @@ async function routeApi(req, res, url) {
     if (req.method === "POST" && action === "like") {
       const actor = authorizeAuthor(req, res, state, body.actorId);
       if (!actor) return;
+      if (!enforceSessionControl(req, res, state, "timeline", actor, "", false)) return;
       if (!requireRateLimit(req, res, `post-like-${actor.id}`, 120, 60 * 1000)) return;
       post.likedBy ||= [];
       const liked = post.likedBy.includes(actor.id);
@@ -2851,8 +3791,73 @@ async function routeApi(req, res, url) {
         ? post.likedBy.filter((characterId) => characterId !== actor.id)
         : [...post.likedBy, actor.id];
       post.metrics.likes = Math.max(0, clampInt(post.metrics.likes, 0) + (liked ? -1 : 1));
-      writeState(state, ["posts"]);
+      if (!liked) addNotification(state, post.authorId, "like", `${post.isAnonymous ? "有人" : actor.name} 喜欢了你的帖子`, { actorId: post.isAnonymous ? "" : actor.id, postId: post.id });
+      writeState(state, ["posts", "notifications"]);
       sendJson(res, 200, publicState(state));
+      return;
+    }
+
+    if (req.method === "POST" && action === "bookmark") {
+      const actor = authorizeAuthor(req, res, state, body.actorId);
+      if (!actor) return;
+      const existing = state.bookmarks.find((entry) => entry.actorId === actor.id && entry.postId === post.id);
+      if (existing) state.bookmarks = state.bookmarks.filter((entry) => entry.id !== existing.id);
+      else state.bookmarks.push({ id: id("bookmark"), actorId: actor.id, postId: post.id, createdAt: new Date().toISOString() });
+      writeState(state, ["bookmarks"]);
+      sendJson(res, 200, publicState(state));
+      return;
+    }
+
+    if (req.method === "POST" && action === "vote") {
+      const actor = authorizeAuthor(req, res, state, body.actorId);
+      if (!actor) return;
+      if (!enforceSessionControl(req, res, state, "timeline", actor, "", false)) return;
+      post.poll = normalizePoll(post.poll);
+      if (!post.poll || post.poll.closed) return sendJson(res, 400, { error: "This poll is closed." });
+      const optionIds = unique(Array.isArray(body.optionIds) ? body.optionIds.map(String) : [String(body.optionId || "")]);
+      const validOptionIds = optionIds.filter((optionId) => post.poll.options.some((option) => option.id === optionId));
+      if (!validOptionIds.length || (!post.poll.multiple && validOptionIds.length > 1)) return sendJson(res, 400, { error: "Choose a valid poll option." });
+      for (const option of post.poll.options) option.voterIds = option.voterIds.filter((actorId) => actorId !== actor.id);
+      for (const option of post.poll.options) {
+        if (validOptionIds.includes(option.id)) option.voterIds.push(actor.id);
+      }
+      addNotification(state, post.authorId, "poll_vote", `${actor.name} 参与了你的投票`, { actorId: actor.id, postId: post.id });
+      writeState(state, ["posts", "notifications"]);
+      sendJson(res, 200, publicState(state));
+      return;
+    }
+
+    if (req.method === "POST" && action === "repost") {
+      const actor = authorizeAuthor(req, res, state, body.actorId);
+      if (!actor) return;
+      if (!enforceSessionControl(req, res, state, "timeline", actor)) return;
+      const quoteContent = String(body.content || "").trim();
+      if (quoteContent.length > MAX_POST_CONTENT_LENGTH) return sendJson(res, 400, { error: `Quote content can be up to ${MAX_POST_CONTENT_LENGTH} characters.` });
+      const dayId = resolveTimelineDayId(state, body.dayId || state.settings.currentDayId) || state.settings.currentDayId;
+      const gameTime = String(body.gameTime || state.settings.gameTime).trim();
+      const repost = {
+        id: id("post"),
+        authorId: actor.id,
+        content: quoteContent,
+        attachment: null,
+        isAnonymous: body.isAnonymous === true,
+        dayId,
+        gameTime,
+        timelineSortKey: buildTimelineSortKey(state, dayId, gameTime),
+        createdAt: new Date().toISOString(),
+        metrics: normalizeMetrics({}),
+        likedBy: [],
+        repostOfPostId: quoteContent ? "" : post.id,
+        quotePostId: quoteContent ? post.id : "",
+        poll: null,
+        replies: []
+      };
+      state.posts.push(repost);
+      post.metrics.reposts = clampInt(post.metrics.reposts, 0) + 1;
+      addNotification(state, post.authorId, quoteContent ? "quote" : "repost", `${actor.name} ${quoteContent ? "引用了" : "转发了"}你的帖子`, { actorId: actor.id, postId: post.id });
+      notifyMentions(state, quoteContent, repost.isAnonymous ? "" : actor.id, { postId: repost.id });
+      writeState(state, ["posts", "notifications"]);
+      sendJson(res, 201, publicState(state));
       return;
     }
 
@@ -2860,6 +3865,7 @@ async function routeApi(req, res, url) {
       const author = authorizeAuthor(req, res, state, body.authorId);
       const content = String(body.content || "").trim();
       if (!author) return;
+      if (!enforceSessionControl(req, res, state, "timeline", author)) return;
       if (!requireRateLimit(req, res, `timeline-reply-${author.id}`, 90, 10 * 60 * 1000)) return;
       if (!content) return sendJson(res, 400, { error: "Reply content is required." });
       if (content.length > MAX_REPLY_CONTENT_LENGTH) return sendJson(res, 400, { error: `Reply content can be up to ${MAX_REPLY_CONTENT_LENGTH} characters.` });
@@ -2869,7 +3875,7 @@ async function routeApi(req, res, url) {
       const gameTime = String(body.gameTime || state.settings.gameTime).trim();
       if (gameTime.length > MAX_GAME_TIME_LENGTH) return sendJson(res, 400, { error: "Reply game time is too long." });
       if (isAdmin(req)) pushUndo(state, "create_reply", `Reply to post as ${author.name}`, ["posts"], { postId, authorId: author.id });
-      post.replies.push({
+      const reply = {
         id: id("reply"),
         authorId: author.id,
         content,
@@ -2877,8 +3883,13 @@ async function routeApi(req, res, url) {
         isAnonymous: body.isAnonymous === true,
         gameTime,
         createdAt: new Date().toISOString()
-      });
-      writeState(state, ["posts", ...(isAdmin(req) ? ["undoStack", "auditLog"] : [])]);
+      };
+      post.replies.push(reply);
+      const parent = parentReplyId ? findPostReply(post, parentReplyId) : null;
+      const recipientId = parent?.authorId || post.authorId;
+      addNotification(state, recipientId, "reply", `${reply.isAnonymous ? "匿名账号" : author.name} 回复了你`, { actorId: reply.isAnonymous ? "" : author.id, postId: post.id, replyId: reply.id });
+      notifyMentions(state, reply.content, reply.isAnonymous ? "" : author.id, { postId: post.id, replyId: reply.id });
+      writeState(state, ["posts", "notifications", ...(isAdmin(req) ? ["undoStack", "auditLog"] : [])]);
       sendJson(res, 201, publicState(state));
       return;
     }
@@ -2910,6 +3921,11 @@ async function routeApi(req, res, url) {
         updates.timelineSortKey = buildTimelineSortKey(state, updates.dayId ?? post.dayId, updates.gameTime ?? post.gameTime);
       }
       if (body.metrics !== undefined) updates.metrics = normalizeMetrics(body.metrics);
+      if (body.pollClosed !== undefined && post.poll) {
+        const poll = normalizePoll(post.poll);
+        poll.closed = body.pollClosed === true;
+        updates.poll = poll;
+      }
       pushUndo(state, "edit_post", "编辑帖子数据 / 时间", ["posts"], { postId });
       Object.assign(post, updates);
       writeState(state, ["posts", "undoStack", "auditLog"]);
@@ -2921,7 +3937,11 @@ async function routeApi(req, res, url) {
       if (!requireAdmin(req, res)) return;
       pushUndo(state, "delete_post", "删除帖子", ["posts"], { postId });
       state.posts = state.posts.filter((item) => item.id !== postId);
-      writeState(state, ["posts", "undoStack", "auditLog"]);
+      state.bookmarks = state.bookmarks.filter((entry) => entry.postId !== postId);
+      for (const character of state.characters) {
+        if (character.pinnedPostId === postId) character.pinnedPostId = "";
+      }
+      writeState(state, ["posts", "bookmarks", "characters", "undoStack", "auditLog"]);
       sendJson(res, 200, publicState(state));
       return;
     }
@@ -3003,6 +4023,7 @@ async function routeApi(req, res, url) {
     if (!author) return;
     if (!chat) return sendJson(res, 400, { error: "Chat not found." });
     if (!ensureChatAccess(req, res, chat, author)) return;
+    if (!enforceSessionControl(req, res, state, "chat", author, chat.id)) return;
     if (!requireRateLimit(req, res, `chat-message-${author.id}`, 180, 60 * 1000)) return;
     if (content.length > MAX_MESSAGE_CONTENT_LENGTH) {
       return sendJson(res, 400, { error: `Message content can be up to ${MAX_MESSAGE_CONTENT_LENGTH} characters.` });
@@ -3022,34 +4043,113 @@ async function routeApi(req, res, url) {
     }
 
     if (!content && !attachment) return sendJson(res, 400, { error: "消息内容或图片不能为空。" });
+    const replyToMessageId = String(body.replyToMessageId || "").trim();
+    if (replyToMessageId && !state.messages.some((message) => message.id === replyToMessageId && message.chatId === chat.id && !message.deletedAt)) {
+      return sendJson(res, 400, { error: "Quoted message was not found in this chat." });
+    }
     const gameTime = String(body.gameTime || state.settings.gameTime).trim();
     if (gameTime.length > MAX_GAME_TIME_LENGTH) return sendJson(res, 400, { error: "Message game time is too long." });
     if (isAdmin(req)) pushUndo(state, "send_message", `Send message as ${author.name}`, ["messages"], { chatId: chat.id, authorId: author.id });
-    state.messages.push({
+    const message = {
       id: id("msg"),
       chatId: chat.id,
       authorId: author.id,
       isAnonymous: body.isAnonymous === true,
       content,
       attachment,
+      replyToMessageId,
+      reactions: {},
       gameTime,
       createdAt: new Date().toISOString()
-    });
-    writeState(state, ["messages", ...(isAdmin(req) ? ["undoStack", "auditLog"] : [])]);
+    };
+    state.messages.push(message);
+    notifyChatMembers(state, chat, author, message, message.isAnonymous);
+    writeState(state, ["messages", "notifications", ...(isAdmin(req) ? ["undoStack", "auditLog"] : [])]);
     sendJson(res, 201, publicState(state));
     return;
   }
 
-  if (req.method === "DELETE" && url.pathname.startsWith("/api/messages/")) {
-    if (!requireAdmin(req, res)) return;
-    const messageId = decodeURIComponent(url.pathname.split("/").pop());
+  const messageMatch = url.pathname.match(/^\/api\/messages\/([^/]+)(?:\/([^/]+))?$/);
+  if (messageMatch) {
+    const messageId = decodeURIComponent(messageMatch[1]);
+    const action = messageMatch[2];
     const message = state.messages.find((item) => item.id === messageId);
     if (!message) return sendJson(res, 404, { error: "消息不存在。" });
-    pushUndo(state, "delete_message", "删除消息", ["messages"], { messageId, chatId: message.chatId });
-    state.messages = state.messages.filter((item) => item.id !== messageId);
-    writeState(state, ["messages", "undoStack", "auditLog"]);
-    sendJson(res, 200, publicState(state));
-    return;
+    const chat = state.chats.find((item) => item.id === message.chatId);
+    if (!chat) return sendJson(res, 404, { error: "Chat not found." });
+
+    if (req.method === "POST" && action === "reaction") {
+      const actor = authorizeAuthor(req, res, state, body.actorId);
+      if (!actor) return;
+      if (!ensureChatAccess(req, res, chat, actor)) return;
+      if (!enforceSessionControl(req, res, state, "chat", actor, chat.id, false)) return;
+      const reaction = String(body.reaction || "").trim().slice(0, 32);
+      if (!reaction || message.deletedAt) return sendJson(res, 400, { error: "Choose a valid reaction." });
+      message.reactions = normalizeReactions(message.reactions);
+      const actorIds = message.reactions[reaction] || [];
+      const removing = actorIds.includes(actor.id);
+      message.reactions[reaction] = removing ? actorIds.filter((actorId) => actorId !== actor.id) : [...actorIds, actor.id];
+      if (!message.reactions[reaction].length) delete message.reactions[reaction];
+      if (!removing) addNotification(state, message.authorId, "message_reaction", `${actor.name} 对你的消息做出了回应`, { actorId: actor.id, chatId: chat.id, messageId: message.id });
+      writeState(state, ["messages", "notifications"]);
+      sendJson(res, 200, publicState(state));
+      return;
+    }
+
+    if (req.method === "POST" && action === "pin") {
+      let actor = null;
+      if (!isAdmin(req)) {
+        actor = authorizeAuthor(req, res, state, body.actorId);
+        if (!actor) return;
+        if (chat.createdBy !== actor.id) return sendJson(res, 403, { error: "Only the chat creator or GM can pin messages." });
+      }
+      chat.pinnedMessageIds ||= [];
+      const pinned = chat.pinnedMessageIds.includes(message.id);
+      chat.pinnedMessageIds = pinned ? chat.pinnedMessageIds.filter((idValue) => idValue !== message.id) : [...chat.pinnedMessageIds, message.id];
+      writeState(state, ["chats"]);
+      sendJson(res, 200, publicState(state));
+      return;
+    }
+
+    if (req.method === "PATCH" && !action) {
+      let actor = null;
+      if (!isAdmin(req)) {
+        actor = authorizeAuthor(req, res, state, body.actorId);
+        if (!actor) return;
+        if (message.authorId !== actor.id || !messageWithinEditWindow(state, message)) return sendJson(res, 403, { error: "This message can no longer be edited." });
+        if (!enforceSessionControl(req, res, state, "chat", actor, chat.id, false)) return;
+      }
+      const content = String(body.content || "").trim();
+      if (!content && !message.attachment) return sendJson(res, 400, { error: "Message content cannot be empty." });
+      if (content.length > MAX_MESSAGE_CONTENT_LENGTH) return sendJson(res, 400, { error: `Message content can be up to ${MAX_MESSAGE_CONTENT_LENGTH} characters.` });
+      if (isAdmin(req)) pushUndo(state, "edit_message", "编辑消息", ["messages"], { messageId, chatId: chat.id });
+      message.content = content;
+      message.editedAt = new Date().toISOString();
+      writeState(state, ["messages", ...(isAdmin(req) ? ["undoStack", "auditLog"] : [])]);
+      sendJson(res, 200, publicState(state));
+      return;
+    }
+
+    if (req.method === "DELETE" && !action) {
+      if (isAdmin(req)) {
+        pushUndo(state, "delete_message", "删除消息", ["messages", "chats"], { messageId, chatId: message.chatId });
+        state.messages = state.messages.filter((item) => item.id !== messageId);
+        chat.pinnedMessageIds = (chat.pinnedMessageIds || []).filter((idValue) => idValue !== messageId);
+        writeState(state, ["messages", "chats", "undoStack", "auditLog"]);
+      } else {
+        const actor = authorizeAuthor(req, res, state, body.actorId);
+        if (!actor) return;
+        if (message.authorId !== actor.id || !messageWithinEditWindow(state, message)) return sendJson(res, 403, { error: "This message can no longer be unsent." });
+        message.content = "";
+        message.attachment = null;
+        message.reactions = {};
+        message.deletedAt = new Date().toISOString();
+        chat.pinnedMessageIds = (chat.pinnedMessageIds || []).filter((idValue) => idValue !== messageId);
+        writeState(state, ["messages", "chats"]);
+      }
+      sendJson(res, 200, publicState(state));
+      return;
+    }
   }
 
   sendJson(res, 404, { error: "API route not found." });
@@ -3289,6 +4389,7 @@ function createHttpServer() {
 
 function startServer() {
   initializeRuntimeState();
+  configureOffsiteBackupTimer();
   const server = createHttpServer();
   server.listen(PORT, HOST, () => {
     console.log(`TRPG SNS system running at http://localhost:${PORT}`);

@@ -19,6 +19,12 @@ const stateBag = {
   memberDrawerChatId: "",
   openReplyPostId: "",
   openReplyParentId: "",
+  openQuotePostId: "",
+  pollComposerOpen: false,
+  messageReplyToId: "",
+  editingMessageId: "",
+  messageDraft: "",
+  profileEditOpen: false,
   actorSearch: "",
   quickActorSearch: "",
   quickActorSearchDraft: "",
@@ -70,6 +76,7 @@ const tabNames = {
   feed: "时间线",
   bulletins: "公告",
   chats: "聊天",
+  notifications: "通知",
   calendar: "校历",
   gm: "GM"
 };
@@ -181,6 +188,10 @@ function bindGlobalEvents() {
       stateBag.chatSearchDraft = target.value;
       return;
     }
+    if (target.id === "message-content") {
+      stateBag.messageDraft = target.value;
+      return;
+    }
     if (target.id === "feed-search") {
       stateBag.feedSearchDraft = target.value;
       return;
@@ -243,13 +254,26 @@ async function handleAction(target) {
   if (action === "quick-adjust-time") return quickAdjustTime(target.dataset.minutes);
   if (action === "quick-save-time") return quickSaveTime();
   if (action === "publish-post") return publishPost();
+  if (action === "toggle-poll-composer") return togglePollComposer();
   if (action === "like-post") return likePost(target.dataset.postId);
+  if (action === "bookmark-post") return bookmarkPost(target.dataset.postId);
+  if (action === "repost-post") return repostPost(target.dataset.postId, false);
+  if (action === "toggle-quote-post") return toggleQuotePost(target.dataset.postId);
+  if (action === "submit-quote-post") return repostPost(target.dataset.postId, true);
+  if (action === "vote-poll") return votePoll(target.dataset.postId);
   if (action === "reply-post") return replyPost(target.dataset.postId, target.dataset.replyId || "");
   if (action === "toggle-reply-composer") return toggleReplyComposer(target.dataset.postId, target.dataset.replyId || "");
   if (action === "delete-reply") return deleteReply(target.dataset.postId, target.dataset.replyId);
   if (action === "save-post") return savePost(target.dataset.postId);
   if (action === "delete-post") return deletePost(target.dataset.postId);
   if (action === "delete-message") return deleteMessage(target.dataset.messageId);
+  if (action === "reply-message") return setMessageReply(target.dataset.messageId);
+  if (action === "cancel-message-reply") return setMessageReply("");
+  if (action === "edit-message") return startEditMessage(target.dataset.messageId);
+  if (action === "cancel-edit-message") return cancelEditMessage();
+  if (action === "react-message") return reactMessage(target.dataset.messageId, target.dataset.reaction);
+  if (action === "pin-message") return pinMessage(target.dataset.messageId);
+  if (action === "jump-message") return jumpToMessage(target.dataset.messageId);
   if (action === "delete-chat") return deleteChat(target.dataset.chatId);
   if (action === "open-gm-chat") return openGmChat(target.dataset.chatId);
   if (action === "open-gm-feed") return setTab("feed");
@@ -264,6 +288,8 @@ async function handleAction(target) {
   if (action === "jump-latest") return jumpToLatest();
   if (action === "toggle-member-drawer") return toggleMemberDrawer(target.dataset.chatId);
   if (action === "send-message") return sendMessage();
+  if (action === "mark-notifications-read") return markNotificationsRead(target.dataset.notificationId || "");
+  if (action === "open-notification") return openNotification(target.dataset.notificationId);
   if (action === "select-calendar-month") return selectCalendarMonth(target.dataset.month);
   if (action === "select-calendar-day") return selectCalendarDay(target.dataset.dayId);
   if (action === "save-current-calendar-day") return saveCurrentCalendarDay();
@@ -279,6 +305,18 @@ async function handleAction(target) {
   if (action === "export-gm-chats") return downloadGmMarkdown("/api/gm/chats/export.md", "kunibayashi-chats");
   if (action === "export-gm-backup") return downloadGmBackup();
   if (action === "restore-gm-backup") return restoreGmBackup();
+  if (action === "run-offsite-backup") return runOffsiteBackup();
+  if (action === "save-session-control") return saveSessionControl();
+  if (action === "save-presence") return savePresence(target.dataset.characterId);
+  if (action === "create-platform-event") return createPlatformEvent();
+  if (action === "end-platform-event") return endPlatformEvent(target.dataset.eventId);
+  if (action === "delete-platform-event") return deletePlatformEvent(target.dataset.eventId);
+  if (action === "create-scheduled-item") return createScheduledItem();
+  if (action === "run-scheduled-item") return runScheduledItem(target.dataset.itemId);
+  if (action === "toggle-scheduled-item") return toggleScheduledItem(target.dataset.itemId, target.dataset.status);
+  if (action === "delete-scheduled-item") return deleteScheduledItem(target.dataset.itemId);
+  if (action === "save-gm-note") return saveGmNote();
+  if (action === "delete-gm-note") return deleteGmNote(target.dataset.noteId);
   if (action === "save-settings") return saveSettings();
   if (action === "create-character") return createCharacter();
   if (action === "import-characters") return importCharacters();
@@ -306,6 +344,10 @@ async function handleAction(target) {
   if (action === "insert-emoji") return insertEmoji(target.dataset.target, target.dataset.value);
   if (action === "view-profile") return viewProfile(target.dataset.characterId);
   if (action === "close-profile") return closeProfile();
+  if (action === "toggle-profile-edit") return toggleProfileEdit();
+  if (action === "save-own-profile") return saveOwnProfile();
+  if (action === "pin-profile-post") return pinProfilePost(target.dataset.postId || "");
+  if (action === "toggle-moderation") return toggleModeration(target.dataset.characterId, target.dataset.moderationType);
   if (action === "request-follow") return requestFollow(target.dataset.characterId);
   if (action === "approve-follow") return updateFollow(target.dataset.followId, "accepted");
   if (action === "reject-follow") return updateFollow(target.dataset.followId, "rejected");
@@ -409,12 +451,49 @@ function render() {
     localStorage.setItem("kokubayashi.tab", stateBag.tab);
   }
   renderShell();
+  const blockingEvent = !isGmAdminMode() ? currentBlockingPlatformEvent() : null;
+  if (blockingEvent) {
+    renderPlatformEventPage(blockingEvent);
+    renderProfileOverlay();
+    return;
+  }
   if (stateBag.tab === "feed") renderFeed();
   if (stateBag.tab === "bulletins") renderBulletins();
   if (stateBag.tab === "chats") renderChats();
+  if (stateBag.tab === "notifications") renderNotifications();
   if (stateBag.tab === "calendar") renderCalendar();
   if (stateBag.tab === "gm") renderGm();
+  renderGlobalBanners();
   renderProfileOverlay();
+}
+
+function currentBlockingPlatformEvent() {
+  return (stateBag.data?.platformEvents || []).find((event) => event.active && event.blocking) || null;
+}
+
+function renderPlatformEventPage(event) {
+  els.viewRoot.innerHTML = `
+    <section class="platform-event-page ${escapeAttr(event.type || "notice")}">
+      <div class="platform-event-code">${escapeHtml(platformEventTypeLabel(event.type))}</div>
+      <h2>${escapeHtml(event.title || "系统通知")}</h2>
+      <div class="platform-event-message">${formatText(event.message || "平台暂时不可用。")}</div>
+      ${event.endsAt ? `<div class="meta">预计恢复：${escapeHtml(formatDateTime(event.endsAt))}</div>` : ""}
+    </section>
+  `;
+}
+
+function renderGlobalBanners() {
+  const events = (stateBag.data?.platformEvents || []).filter((event) => event.active && !event.blocking);
+  const announcement = stateBag.data?.settings?.sessionControl?.announcement || "";
+  const rows = [
+    ...events.map((event) => `<div class="platform-banner ${escapeAttr(event.type || "notice")}"><strong>${escapeHtml(event.title)}</strong><span>${escapeHtml(event.message)}</span></div>`),
+    ...(announcement ? [`<div class="platform-banner session"><strong>GM 通知</strong><span>${escapeHtml(announcement)}</span></div>`] : [])
+  ];
+  if (rows.length) els.viewRoot.insertAdjacentHTML("afterbegin", `<div class="platform-banner-stack">${rows.join("")}</div>`);
+}
+
+function platformEventTypeLabel(type) {
+  return ({ maintenance: "维护", outage: "网络中断", emergency: "紧急通知", suspension: "账号限制", notice: "系统通知" })[type] || "系统通知";
 }
 
 function canAutoRender() {
@@ -723,6 +802,15 @@ function isGmAdminMode() {
   return stateBag.gmUnlocked && !isPreviewMode() && !isGmAccountView();
 }
 
+function surfaceLocked(scope, chatId = "") {
+  if (isGmAdminMode()) return false;
+  const controls = stateBag.data?.settings?.sessionControl || {};
+  if (controls.readOnly || controls.viewerMuted) return true;
+  if (scope === "timeline" && controls.timelineLocked) return true;
+  if (scope === "chat" && (controls.chatLocked || (controls.lockedChatIds || []).includes(chatId))) return true;
+  return Boolean(currentBlockingPlatformEvent());
+}
+
 function effectiveActorId() {
   return isPreviewMode() ? stateBag.previewActorId : stateBag.actorId;
 }
@@ -757,11 +845,21 @@ function navBadgeFor(tab) {
     const count = unreadChatCount();
     return count ? String(Math.min(count, 99)) : "";
   }
+  if (tab === "notifications") {
+    const count = unreadNotifications().length;
+    return count ? String(Math.min(count, 99)) : "";
+  }
   if (tab === "gm" && isGmAdminMode()) {
     const pending = pendingGmCount();
     return pending ? String(Math.min(pending, 99)) : "";
   }
   return "";
+}
+
+function unreadNotifications() {
+  return (stateBag.data?.notifications || []).filter((notification) => (
+    !notification.readAt && (!isGmAdminMode() || notification.recipientId === "__gm__")
+  ));
 }
 
 function pendingGmCount() {
@@ -808,13 +906,14 @@ function renderFeed() {
   const filteredPosts = filteredFeedPosts(sortTimelinePosts(stateBag.data.posts || []));
   const posts = filteredPosts.slice(0, stateBag.feedLimit);
   const actor = currentActor();
-  const canPost = Boolean(actor) && !isPreviewMode();
+  const canPost = Boolean(actor) && !isPreviewMode() && !surfaceLocked("timeline");
   els.viewRoot.innerHTML = `
     <div class="feed-layout">
       <section class="composer">
         <textarea id="post-content" maxlength="2000" placeholder="${isPreviewMode() ? "玩家视角预览为只读" : (actor ? "现在发生了什么？" : "先创建玩家账号")}" ${canPost ? "" : "disabled"}></textarea>
         <div class="message-tools post-tools">
           ${renderEmojiBar("post-content")}
+          <button class="secondary-button compact-action" type="button" data-action="toggle-poll-composer" ${canPost ? "" : "disabled"}>${stateBag.pollComposerOpen ? "收起投票" : "投票"}</button>
           <label class="checkbox-line compact-checkbox">
             <input id="post-anonymous" type="checkbox" ${canPost ? "" : "disabled"}>
             <span>匿名发布</span>
@@ -824,8 +923,15 @@ function renderFeed() {
           </label>
           <span id="post-image-hint" class="hint">未选择图片</span>
         </div>
+        ${stateBag.pollComposerOpen ? `
+          <div class="poll-composer">
+            <input id="post-poll-question" maxlength="200" placeholder="投票问题">
+            <textarea id="post-poll-options" maxlength="800" placeholder="每行一个选项，至少两项"></textarea>
+            <label class="checkbox-line compact-checkbox"><input id="post-poll-multiple" type="checkbox"><span>允许多选</span></label>
+          </div>
+        ` : ""}
         <div class="composer-actions">
-          <div class="hint">${escapeHtml(stateBag.data.settings.gameTime)} · ${escapeHtml(actor?.name || "未选择账号")}</div>
+          <div class="hint">${escapeHtml(stateBag.data.settings.gameTime)} · ${escapeHtml(actor?.name || "未选择账号")}${surfaceLocked("timeline") ? " · 时间线已锁定" : ""}</div>
           <button class="primary-button" type="button" data-action="publish-post" ${canPost ? "" : "disabled"}>发布</button>
         </div>
       </section>
@@ -857,6 +963,7 @@ function feedFilterButtons() {
   const filters = [
     ["all", "全部"],
     ["mine", "我的"],
+    ["bookmarked", "收藏"],
     ["anonymous", "匿名"],
     ["images", "有图"]
   ];
@@ -926,6 +1033,7 @@ function filteredFeedPosts(posts) {
   return posts.filter((post) => {
     const author = getActor(post.authorId);
     if (stateBag.feedFilter === "mine" && post.authorId !== actorId && post.viewerOwnsPost !== true) return false;
+    if (stateBag.feedFilter === "bookmarked" && !isPostBookmarked(post.id)) return false;
     if (stateBag.feedFilter === "anonymous" && post.isAnonymous !== true) return false;
     if (stateBag.feedFilter === "images" && post.attachment?.type !== "image") return false;
     if (stateBag.feedHashtag && !postMatchesHashtag(post, stateBag.feedHashtag)) return false;
@@ -933,6 +1041,10 @@ function filteredFeedPosts(posts) {
     const replyText = (post.replies || []).map((reply) => reply.content).join(" ");
     return searchableText([post.content, author?.name, author?.handle, replyText, postHashtags(post).join(" ")]).includes(query);
   });
+}
+
+function isPostBookmarked(postId) {
+  return (stateBag.data?.bookmarks || []).some((bookmark) => bookmark.postId === postId);
 }
 
 function renderBulletins() {
@@ -979,6 +1091,85 @@ function renderBulletinCard(bulletin) {
   `;
 }
 
+function renderNotifications() {
+  const notifications = [...(stateBag.data?.notifications || [])]
+    .filter((notification) => !isGmAdminMode() || notification.recipientId === "__gm__")
+    .sort((a, b) => String(b.createdAt || "").localeCompare(String(a.createdAt || "")));
+  els.viewRoot.innerHTML = `
+    <div class="notification-layout">
+      <header class="notification-head">
+        <div>
+          <div class="section-title">通知中心</div>
+          <div class="meta">${unreadNotifications().length} 条未读</div>
+        </div>
+        <button class="secondary-button compact-action" type="button" data-action="mark-notifications-read" ${unreadNotifications().length ? "" : "disabled"}>全部已读</button>
+      </header>
+      <section class="notification-list">
+        ${notifications.map(renderNotification).join("") || `<div class="panel empty-panel">暂时没有通知。</div>`}
+      </section>
+    </div>
+  `;
+}
+
+function renderNotification(notification) {
+  const actor = getActor(notification.actorId);
+  const recipient = isGmAdminMode() && notification.recipientId !== "__gm__" ? getActor(notification.recipientId) : null;
+  return `
+    <article class="notification-item ${notification.readAt ? "read" : "unread"}">
+      ${actor ? renderAvatar(actor) : `<div class="avatar notification-system">通</div>`}
+      <button class="notification-content" type="button" data-action="open-notification" data-notification-id="${escapeAttr(notification.id)}">
+        <span class="notification-type">${escapeHtml(notificationTypeLabel(notification.type))}${recipient ? ` · 给 ${escapeHtml(recipient.name)}` : ""}</span>
+        <strong>${escapeHtml(notification.text)}</strong>
+        <span class="meta">${escapeHtml(formatDateTime(notification.createdAt))}</span>
+      </button>
+      ${notification.readAt ? "" : `<button class="ghost-button compact-action" type="button" data-action="mark-notifications-read" data-notification-id="${escapeAttr(notification.id)}">已读</button>`}
+    </article>
+  `;
+}
+
+function notificationTypeLabel(type) {
+  return ({
+    mention: "提及", message: "新消息", message_reaction: "消息回应", like: "喜欢", reply: "回复",
+    repost: "转发", quote: "引用", poll_vote: "投票", follow_request: "关注请求", follow_update: "关注状态",
+    chat_member_request: "成员申请", chat_member_update: "群聊申请", chat_invite: "群聊邀请",
+    schedule: "计划队列", schedule_error: "队列错误"
+  })[type] || "通知";
+}
+
+async function markNotificationsRead(notificationId = "") {
+  const actor = currentActor();
+  const recipientId = isGmAdminMode() ? "__gm__" : "";
+  if (!actor && !recipientId) return;
+  stateBag.data = await api("/api/notifications/read", {
+    method: "PATCH",
+    body: {
+      actorId: actor?.id || "",
+      recipientId,
+      all: !notificationId,
+      ids: notificationId ? [notificationId] : []
+    }
+  });
+  render();
+}
+
+async function openNotification(notificationId) {
+  const notification = (stateBag.data?.notifications || []).find((entry) => entry.id === notificationId);
+  if (!notification) return;
+  if (!notification.readAt) await markNotificationsRead(notification.id);
+  if (notification.chatId) {
+    stateBag.activeChatId = notification.chatId;
+    localStorage.setItem("kokubayashi.chatId", notification.chatId);
+    setTab("chats");
+    return;
+  }
+  if (notification.postId) {
+    setTab("feed");
+    setTimeout(() => document.querySelector(`[data-post-id="${CSS.escape(notification.postId)}"]`)?.closest(".post")?.scrollIntoView({ block: "center" }), 0);
+    return;
+  }
+  if (notification.actorId) viewProfile(notification.actorId);
+}
+
 function renderPost(post) {
   const isAnonymous = post.isAnonymous === true;
   const author = getActor(post.authorId);
@@ -993,8 +1184,12 @@ function renderPost(post) {
   ].filter(Boolean).join(" · ");
   const replies = post.replies || [];
   const replyOpen = !isPreviewMode() && stateBag.openReplyPostId === post.id && !stateBag.openReplyParentId;
+  const quoteOpen = !isPreviewMode() && stateBag.openQuotePostId === post.id;
   const viewerHasLiked = post.viewerHasLiked === true || (post.likedBy || []).includes(effectiveActorId());
-  const canLike = Boolean(currentActor()) && !isPreviewMode();
+  const canLike = Boolean(currentActor()) && !isPreviewMode() && !surfaceLocked("timeline");
+  const bookmarked = isPostBookmarked(post.id) || post.viewerBookmarked === true;
+  const sourcePostId = post.quotePostId || post.repostOfPostId;
+  const sourcePost = sourcePostId ? (stateBag.data.posts || []).find((entry) => entry.id === sourcePostId) : null;
   const admin = isGmAdminMode() ? `
     <div class="admin-box">
       <div class="admin-row">
@@ -1017,7 +1212,7 @@ function renderPost(post) {
   ` : "";
 
   return `
-    <article class="post">
+    <article class="post ${post.repostOfPostId ? "repost" : ""} ${post.quotePostId ? "quote-post" : ""}" data-post-id="${escapeAttr(post.id)}">
       <header class="post-header">
         <button class="profile-link author-line" type="button" data-action="view-profile" data-character-id="${profileId}" ${profileId ? "" : "disabled"}>
           ${isAnonymous ? renderAnonymousAvatar() : renderAvatar(author)}
@@ -1027,18 +1222,67 @@ function renderPost(post) {
           </div>
         </button>
       </header>
+      ${post.repostOfPostId ? `<div class="repost-label">转发了帖子</div>` : ""}
       <div class="post-content">${formatText(post.content, { hashtags: true })}</div>
       ${post.attachment?.type === "image" ? renderImageAttachment(post.attachment, "post-image") : ""}
+      ${sourcePostId ? renderEmbeddedPost(sourcePost) : ""}
+      ${post.poll ? renderPoll(post) : ""}
       <div class="post-actions">
         <button class="metric-button ${viewerHasLiked ? "active" : ""}" type="button" data-action="like-post" data-post-id="${post.id}" ${canLike ? "" : "disabled"}>${viewerHasLiked ? "取消喜欢" : "喜欢"} ${post.metrics.likes}</button>
         <button class="metric-button" type="button" data-action="toggle-reply-composer" data-post-id="${post.id}" ${isPreviewMode() ? "disabled" : ""}>${replyOpen ? "收起回复" : `回复${replies.length ? ` ${replies.length}` : ""}`}</button>
-        <span>转发 ${post.metrics.reposts}</span>
+        <button class="metric-button" type="button" data-action="repost-post" data-post-id="${post.id}" ${canLike ? "" : "disabled"}>转发 ${post.metrics.reposts}</button>
+        <button class="metric-button" type="button" data-action="toggle-quote-post" data-post-id="${post.id}" ${canLike ? "" : "disabled"}>${quoteOpen ? "收起引用" : "引用"}</button>
+        <button class="metric-button ${bookmarked ? "active" : ""}" type="button" data-action="bookmark-post" data-post-id="${post.id}" ${canLike ? "" : "disabled"}>${bookmarked ? "已收藏" : "收藏"}</button>
         <span>浏览 ${post.metrics.views}</span>
       </div>
       ${replies.length ? `<div class="reply-list">${renderReplyThread(post.id, replies)}</div>` : ""}
       ${replyOpen ? renderReplyComposer(post.id) : ""}
+      ${quoteOpen ? renderQuoteComposer(post.id) : ""}
       ${admin}
     </article>
+  `;
+}
+
+function renderEmbeddedPost(post) {
+  if (!post) return `<div class="embedded-post unavailable">原帖不可见或已删除。</div>`;
+  const author = getActor(post.authorId);
+  const name = post.isAnonymous ? "匿名" : (author?.name || "未知");
+  return `
+    <div class="embedded-post">
+      <div class="meta"><strong>${escapeHtml(name)}</strong> ${post.isAnonymous ? "" : escapeHtml(author?.handle || "")} · ${escapeHtml(postTimelineLabel(post))}</div>
+      ${post.content ? `<div>${formatText(post.content, { hashtags: true })}</div>` : ""}
+      ${post.attachment?.type === "image" ? renderImageAttachment(post.attachment, "post-image") : ""}
+    </div>
+  `;
+}
+
+function renderPoll(post) {
+  const poll = post.poll;
+  const canVote = Boolean(currentActor()) && !isPreviewMode() && !surfaceLocked("timeline") && !poll.closed;
+  const inputType = poll.multiple ? "checkbox" : "radio";
+  const total = (poll.options || []).reduce((sum, option) => sum + Number(option.count ?? option.voterIds?.length ?? 0), 0);
+  return `
+    <div class="post-poll">
+      <div class="mini-title">${escapeHtml(poll.question)}</div>
+      <div class="poll-options">
+        ${(poll.options || []).map((option) => {
+          const count = Number(option.count ?? option.voterIds?.length ?? 0);
+          const percent = total ? Math.round((count / total) * 100) : 0;
+          return `<label class="poll-option"><input type="${inputType}" name="poll-${escapeAttr(post.id)}" value="${escapeAttr(option.id)}" ${option.viewerVoted ? "checked" : ""} ${canVote ? "" : "disabled"}><span><strong>${escapeHtml(option.text)}</strong><small>${count} 票 · ${percent}%</small><i style="width:${percent}%"></i></span></label>`;
+        }).join("")}
+      </div>
+      <div class="poll-footer"><span>${total} 票${poll.multiple ? " · 可多选" : ""}${poll.closed ? " · 已结束" : ""}</span><button class="secondary-button compact-action" type="button" data-action="vote-poll" data-post-id="${escapeAttr(post.id)}" ${canVote ? "" : "disabled"}>投票</button></div>
+    </div>
+  `;
+}
+
+function renderQuoteComposer(postId) {
+  return `
+    <div class="quote-composer">
+      <textarea id="quote-${escapeAttr(postId)}" maxlength="2000" placeholder="添加引用文字"></textarea>
+      <label class="checkbox-line compact-checkbox"><input id="quote-${escapeAttr(postId)}-anonymous" type="checkbox"><span>匿名引用</span></label>
+      <button class="primary-button compact-action" type="button" data-action="submit-quote-post" data-post-id="${escapeAttr(postId)}">发布引用</button>
+    </div>
   `;
 }
 
@@ -1155,7 +1399,22 @@ function renderChats() {
   const hiddenMessageCount = Math.max(0, allMessages.length - messageLimit);
   const messages = hiddenMessageCount ? allMessages.slice(-messageLimit) : allMessages;
   const roomChats = filteredAndSortedChats(chats);
-  const canSendMessage = Boolean(active && currentActor()) && !isPreviewMode();
+  const canSendMessage = Boolean(active && currentActor()) && !isPreviewMode() && !surfaceLocked("chat", active?.id);
+  const pinnedMessages = active
+    ? (active.pinnedMessageIds || []).map((messageId) => allMessages.find((message) => message.id === messageId)).filter(Boolean)
+    : [];
+  const replyMessage = allMessages.find((message) => message.id === stateBag.messageReplyToId && !message.deletedAt);
+  const editingMessage = allMessages.find((message) => message.id === stateBag.editingMessageId && !message.deletedAt);
+  const typingMembers = active
+    ? (stateBag.data.presence || []).filter((presence) => presence.typingChatId === active.id && presence.characterId !== effectiveActorId() && presence.status !== "offline")
+    : [];
+  const unreadIds = new Set(active ? unreadMessagesForChat(active).map((message) => message.id) : []);
+  let unreadDividerAdded = false;
+  const renderedMessages = messages.map((message) => {
+    const divider = !unreadDividerAdded && unreadIds.has(message.id) ? `<div class="unread-divider"><span>未读消息</span></div>` : "";
+    if (divider) unreadDividerAdded = true;
+    return `${divider}${renderMessage(message, active)}`;
+  }).join("");
   const previousBox = document.getElementById("messages");
   const previousChatId = stateBag.renderedChatId;
   const wasNearBottom = isNearBottom(previousBox);
@@ -1209,31 +1468,40 @@ function renderChats() {
           <div>
             <div class="section-title">${escapeHtml(active?.name || "聊天")}</div>
             <div class="meta member-links">${renderMemberProfileLinks(active)}</div>
+            ${typingMembers.length ? `<div class="typing-line">${escapeHtml(typingMembers.map((presence) => getActor(presence.characterId)?.name).filter(Boolean).join("、"))} 正在输入...</div>` : ""}
           </div>
           <div class="row-actions">
             ${active ? `<button class="secondary-button compact-action" type="button" data-action="toggle-member-drawer" data-chat-id="${escapeAttr(active.id)}">${stateBag.memberDrawerChatId === active.id ? "收起成员" : "成员"}</button>` : ""}
             ${canDeleteChat(active) ? `<button class="danger-button compact-action" type="button" data-action="delete-chat" data-chat-id="${escapeAttr(active.id)}">删除聊天</button>` : ""}
           </div>
         </header>
+        ${pinnedMessages.length ? `
+          <div class="pinned-message-strip">
+            <span class="mini-title">置顶 ${pinnedMessages.length}</span>
+            ${pinnedMessages.slice(-3).map((message) => `<button type="button" data-action="jump-message" data-message-id="${escapeAttr(message.id)}">${escapeHtml(message.deletedAt ? "已撤回消息" : (message.content || "图片"))}</button>`).join("")}
+          </div>
+        ` : ""}
         <div class="messages" id="messages">
           ${hiddenMessageCount ? `<button class="ghost-button load-older-messages" type="button" data-action="load-older-messages" data-chat-id="${escapeAttr(active.id)}">显示更早的消息（${hiddenMessageCount}）</button>` : ""}
-          ${messages.map(renderMessage).join("") || `<div class="hint">这里还没有消息。</div>`}
+          ${renderedMessages || `<div class="hint">这里还没有消息。</div>`}
         </div>
         ${active && stateBag.chatNewPromptId === active.id ? `<button class="jump-latest-button" type="button" data-action="jump-latest">有新消息，跳到最新</button>` : ""}
         <div class="message-form">
-          <textarea id="message-content" maxlength="500" placeholder="${isPreviewMode() ? "玩家视角预览为只读" : "发送消息"}" ${canSendMessage ? "" : "disabled"}></textarea>
+          ${replyMessage ? `<div class="composer-context"><span>回复 ${escapeHtml(messageDisplayName(replyMessage))}：${escapeHtml(messageSummary(replyMessage))}</span><button class="ghost-button compact-action" type="button" data-action="cancel-message-reply">取消</button></div>` : ""}
+          ${editingMessage ? `<div class="composer-context editing"><span>正在编辑消息</span><button class="ghost-button compact-action" type="button" data-action="cancel-edit-message">取消</button></div>` : ""}
+          <textarea id="message-content" maxlength="2000" placeholder="${isPreviewMode() ? "玩家视角预览为只读" : (surfaceLocked("chat", active?.id) ? "当前聊天已由 GM 锁定" : "发送消息")}" ${canSendMessage ? "" : "disabled"}>${escapeHtml(stateBag.messageDraft)}</textarea>
           <div class="message-tools">
             ${renderEmojiBar("message-content")}
             <label class="checkbox-line compact-checkbox">
-              <input id="message-anonymous" type="checkbox" ${canSendMessage ? "" : "disabled"}>
+              <input id="message-anonymous" type="checkbox" ${canSendMessage && !editingMessage ? "" : "disabled"}>
               <span>匿名发送</span>
             </label>
             <label class="file-picker">图片
-              <input id="message-image" type="file" accept="image/*" ${canSendMessage ? "" : "disabled"}>
+              <input id="message-image" type="file" accept="image/*" ${canSendMessage && !editingMessage ? "" : "disabled"}>
             </label>
             <span id="message-image-hint" class="hint">未选择图片</span>
           </div>
-          <button class="primary-button" type="button" data-action="send-message" ${canSendMessage ? "" : "disabled"}>发送</button>
+          <button class="primary-button" type="button" data-action="send-message" ${canSendMessage ? "" : "disabled"}>${editingMessage ? "保存编辑" : "发送"}</button>
         </div>
       </section>
       ${renderChatMemberDrawer(active)}
@@ -1336,7 +1604,7 @@ function renderChatMemberDrawer(chat) {
       <div class="member-drawer-list">
         ${members.map((member) => `
           <button class="member-drawer-row" type="button" data-action="view-profile" data-character-id="${escapeAttr(member.id)}">
-            ${renderAvatar(member)}
+            <span class="member-avatar-presence">${renderAvatar(member)}${renderPresenceIndicator(member.id)}</span>
             <span class="name-block">
               <span class="name">${escapeHtml(member.name)}</span>
               <span class="handle">${escapeHtml(member.handle || "")}</span>
@@ -1350,18 +1618,21 @@ function renderChatMemberDrawer(chat) {
   `;
 }
 
-function renderMessage(message) {
+function renderMessage(message, chat) {
   const isAnonymous = message.isAnonymous === true;
   const author = getActor(message.authorId);
   const profileId = isAnonymous && !isGmAdminMode() ? "" : author?.id || "";
-  const displayName = isAnonymous
-    ? (isGmAdminMode() && author ? `匿名（${author.name}）` : "匿名")
-    : (author?.name || "未知");
+  const displayName = messageDisplayName(message);
   const mine = message.viewerOwnsMessage === true || (!isAnonymous && author?.id === effectiveActorId());
   const hasImage = message.attachment?.type === "image";
   const hasText = Boolean(String(message.content || "").trim());
+  const deleted = Boolean(message.deletedAt);
+  const canEdit = !deleted && !isPreviewMode() && canModifyMessage(message);
+  const canPin = !deleted && !isPreviewMode() && (isGmAdminMode() || chat?.createdBy === effectiveActorId());
+  const pinned = (chat?.pinnedMessageIds || []).includes(message.id);
+  const reactionEntries = Object.entries(message.reactions || {}).filter(([, value]) => reactionCount(value) > 0);
   return `
-    <div class="message-row ${mine ? "mine" : ""} ${hasImage ? "with-image" : ""}">
+    <div class="message-row ${mine ? "mine" : ""} ${hasImage ? "with-image" : ""} ${deleted ? "deleted" : ""}" data-message-id="${escapeAttr(message.id)}">
       <button class="profile-avatar-button" type="button" data-action="view-profile" data-character-id="${profileId}" ${profileId ? "" : "disabled"}>
         ${isAnonymous ? renderAnonymousAvatar() : renderAvatar(author)}
       </button>
@@ -1370,14 +1641,61 @@ function renderMessage(message) {
           <button class="inline-profile-link" type="button" data-action="view-profile" data-character-id="${profileId}" ${profileId ? "" : "disabled"}>
             <strong>${escapeHtml(displayName)}</strong>
           </button>
-          · ${escapeHtml(message.gameTime)}
+          · ${escapeHtml(message.gameTime)}${message.editedAt ? " · 已编辑" : ""}${pinned ? " · 已置顶" : ""}
         </div>
-        ${hasText ? `<div class="message-text">${formatText(message.content)}</div>` : ""}
-        ${message.attachment?.type === "image" ? renderImageAttachment(message.attachment) : ""}
-        ${isGmAdminMode() ? `<button class="danger-button message-delete" type="button" data-action="delete-message" data-message-id="${message.id}">删除</button>` : ""}
+        ${message.replyToMessageId ? renderMessageQuote(message.replyToMessageId, message.chatId) : ""}
+        ${deleted ? `<div class="message-deleted-text">此消息已撤回</div>` : `
+          ${hasText ? `<div class="message-text">${formatText(message.content)}</div>` : ""}
+          ${message.attachment?.type === "image" ? renderImageAttachment(message.attachment) : ""}
+        `}
+        ${reactionEntries.length ? `<div class="message-reactions">${reactionEntries.map(([reaction, value]) => `<button class="reaction-chip ${reactionViewerReacted(value) ? "active" : ""}" type="button" data-action="react-message" data-message-id="${escapeAttr(message.id)}" data-reaction="${escapeAttr(reaction)}" ${deleted || isPreviewMode() ? "disabled" : ""}>${escapeHtml(reaction)} ${reactionCount(value)}</button>`).join("")}</div>` : ""}
+        ${deleted || isPreviewMode() ? "" : `
+          <div class="message-actions">
+            <button class="ghost-button compact-action" type="button" data-action="reply-message" data-message-id="${escapeAttr(message.id)}">回复</button>
+            ${["👍", "❤️", "😂", "😮"].map((reaction) => `<button class="reaction-add" type="button" data-action="react-message" data-message-id="${escapeAttr(message.id)}" data-reaction="${escapeAttr(reaction)}" title="回应 ${escapeAttr(reaction)}">${reaction}</button>`).join("")}
+            ${canEdit ? `<button class="ghost-button compact-action" type="button" data-action="edit-message" data-message-id="${escapeAttr(message.id)}">编辑</button>` : ""}
+            ${canPin ? `<button class="ghost-button compact-action" type="button" data-action="pin-message" data-message-id="${escapeAttr(message.id)}">${pinned ? "取消置顶" : "置顶"}</button>` : ""}
+            ${canEdit || isGmAdminMode() ? `<button class="danger-button compact-action" type="button" data-action="delete-message" data-message-id="${escapeAttr(message.id)}">${isGmAdminMode() ? "删除" : "撤回"}</button>` : ""}
+          </div>
+        `}
       </div>
     </div>
   `;
+}
+
+function messageDisplayName(message) {
+  const author = getActor(message?.authorId);
+  if (message?.isAnonymous) return isGmAdminMode() && author ? `匿名（${author.name}）` : "匿名";
+  return author?.name || "未知";
+}
+
+function messageSummary(message) {
+  if (!message) return "消息不存在";
+  if (message.deletedAt) return "已撤回消息";
+  return String(message.content || (message.attachment ? "图片" : "消息")).trim().slice(0, 80);
+}
+
+function renderMessageQuote(messageId, chatId) {
+  const quoted = (indexedMessages().byChat.get(chatId) || []).find((message) => message.id === messageId);
+  return `<button class="message-quote" type="button" data-action="jump-message" data-message-id="${escapeAttr(messageId)}"><strong>${escapeHtml(messageDisplayName(quoted))}</strong><span>${escapeHtml(messageSummary(quoted))}</span></button>`;
+}
+
+function reactionCount(value) {
+  if (Array.isArray(value)) return value.length;
+  return Math.max(0, Number(value?.count || 0));
+}
+
+function reactionViewerReacted(value) {
+  return Array.isArray(value) ? value.includes(effectiveActorId()) : value?.viewerReacted === true;
+}
+
+function canModifyMessage(message) {
+  if (!message) return false;
+  if (isGmAdminMode()) return true;
+  if (!currentActor() || !(message.viewerOwnsMessage === true || message.authorId === effectiveActorId())) return false;
+  const minutes = Number(stateBag.data?.settings?.sessionControl?.messageEditWindowMinutes || 15);
+  const createdAt = new Date(message.createdAt).getTime();
+  return minutes > 0 && Number.isFinite(createdAt) && Date.now() - createdAt <= minutes * 60 * 1000;
 }
 
 function renderCalendar() {
@@ -1484,32 +1802,90 @@ function renderProfileOverlay() {
     return;
   }
   const postCount = (stateBag.data.posts || []).filter((post) => post.authorId === profile.id).length;
-  const messageCount = (stateBag.data.messages || []).filter((message) => message.authorId === profile.id).length;
   const status = relationshipStatus(profile.id);
+  const presence = presenceFor(profile.id);
+  const followers = profileConnections(profile.id, "followers");
+  const following = profileConnections(profile.id, "following");
+  const pinnedPost = profile.pinnedPostId ? (stateBag.data.posts || []).find((post) => post.id === profile.pinnedPostId) : null;
+  const ownProfile = currentActor()?.id === profile.id && !isPreviewMode();
+  const bannerStyle = profile.bannerData ? `style="background-image:url('${escapeAttr(profile.bannerData)}')"` : "";
 
   els.viewRoot.insertAdjacentHTML("beforeend", `
     <div class="profile-backdrop" role="presentation">
       <section class="profile-modal" role="dialog" aria-modal="true" aria-label="${escapeAttr(profile.name)} profile">
         <button class="profile-close" type="button" data-action="close-profile" aria-label="Close profile">×</button>
+        <div class="profile-banner ${profile.bannerData ? "has-image" : ""}" ${bannerStyle}></div>
         <div class="profile-hero">
-          ${renderAvatar(profile)}
+          <div class="profile-avatar-wrap">${renderAvatar(profile)}${renderPresenceIndicator(profile.id)}</div>
           <div class="profile-heading">
             <div class="profile-name">${escapeHtml(profile.name)}</div>
             <div class="profile-handle">${escapeHtml(profile.handle)}</div>
             ${renderCharacterTags(profile)}
           </div>
+          ${ownProfile ? `<button class="secondary-button compact-action profile-edit-button" type="button" data-action="toggle-profile-edit">${stateBag.profileEditOpen ? "收起编辑" : "编辑资料"}</button>` : ""}
         </div>
+        <div class="profile-presence ${escapeAttr(presence.status)}"><strong>${escapeHtml(presenceLabel(presence.status))}</strong>${presence.statusText ? `<span>${escapeHtml(presence.statusText)}</span>` : ""}${presence.lastSeenAt && presence.status === "offline" ? `<span>最后出现于 ${escapeHtml(formatDateTime(presence.lastSeenAt))}</span>` : ""}</div>
+        ${profile.bio ? `<div class="profile-bio">${formatText(profile.bio)}</div>` : ""}
+        ${(profile.location || profile.birthday) ? `<div class="profile-details">${profile.location ? `<span>所在地：${escapeHtml(profile.location)}</span>` : ""}${profile.birthday ? `<span>生日：${escapeHtml(profile.birthday)}</span>` : ""}</div>` : ""}
         <div class="profile-stats">
-          <div><strong>${postCount}</strong><span>posts</span></div>
-          <div><strong>${messageCount}</strong><span>messages</span></div>
-          <div><strong>${escapeHtml(relationshipLabel(profile.id))}</strong><span>status</span></div>
+          <div><strong>${postCount}</strong><span>帖子</span></div>
+          <div><strong>${profile.followerCount ?? followers.length}</strong><span>关注者</span></div>
+          <div><strong>${profile.followingCount ?? following.length}</strong><span>正在关注</span></div>
         </div>
+        ${stateBag.profileEditOpen && ownProfile ? renderOwnProfileEditor(profile) : ""}
         <div class="profile-actions">
           ${renderProfileActions(profile, status)}
         </div>
+        ${pinnedPost ? `<div class="profile-pinned"><div class="mini-title">置顶帖子</div>${renderEmbeddedPost(pinnedPost)}</div>` : ""}
+        ${renderProfileConnections(followers, following)}
+        ${renderProfileHistory(profile.profileHistory || [])}
       </section>
     </div>
   `);
+}
+
+function renderOwnProfileEditor(profile) {
+  const ownPosts = sortTimelinePosts((stateBag.data.posts || []).filter((post) => post.authorId === profile.id && !post.isAnonymous));
+  return `
+    <div class="profile-editor">
+      <div class="two-col">
+        <label>显示名 <input id="profile-edit-name" maxlength="40" value="${escapeAttr(profile.name)}"></label>
+        <label>@handle <input id="profile-edit-handle" maxlength="32" value="${escapeAttr(profile.handle)}"></label>
+      </div>
+      <label>简介 <textarea id="profile-edit-bio" maxlength="300" placeholder="介绍一下自己">${escapeHtml(profile.bio || "")}</textarea></label>
+      <div class="two-col">
+        <label>所在地 <input id="profile-edit-location" maxlength="80" value="${escapeAttr(profile.location || "")}"></label>
+        <label>生日 <input id="profile-edit-birthday" maxlength="80" value="${escapeAttr(profile.birthday || "")}" placeholder="例如 4月12日"></label>
+      </div>
+      <label>置顶帖子
+        <select id="profile-edit-pinned-post">
+          <option value="">不置顶</option>
+          ${ownPosts.map((post) => `<option value="${escapeAttr(post.id)}" ${post.id === profile.pinnedPostId ? "selected" : ""}>${escapeHtml(messageSummary(post))}</option>`).join("")}
+        </select>
+      </label>
+      <div class="profile-media-editors">
+        <label class="file-picker compact-file-picker">更换头像<input id="profile-edit-avatar" type="file" accept="image/*"></label>
+        <label class="file-picker compact-file-picker">更换封面<input id="profile-edit-banner" type="file" accept="image/*"></label>
+      </div>
+      <button class="primary-button" type="button" data-action="save-own-profile">保存资料</button>
+    </div>
+  `;
+}
+
+function renderProfileConnections(followers, following) {
+  if (!followers.length && !following.length) return "";
+  const renderPeople = (people) => people.slice(0, 12).map((person) => `<button type="button" data-action="view-profile" data-character-id="${escapeAttr(person.id)}">${renderAvatar(person)}<span>${escapeHtml(person.name)}</span></button>`).join("");
+  return `
+    <div class="profile-connections">
+      ${followers.length ? `<div><div class="mini-title">关注者</div><div class="profile-people">${renderPeople(followers)}</div></div>` : ""}
+      ${following.length ? `<div><div class="mini-title">正在关注</div><div class="profile-people">${renderPeople(following)}</div></div>` : ""}
+    </div>
+  `;
+}
+
+function renderProfileHistory(history) {
+  if (!history.length) return "";
+  return `<details class="profile-history"><summary>曾用资料</summary>${history.slice(0, 8).map((entry) => `<div><span>${escapeHtml(entry.name)} ${escapeHtml(entry.handle || "")}</span><small>${escapeHtml(formatDateTime(entry.changedAt))}</small></div>`).join("")}</details>`;
 }
 
 function renderProfileActions(profile, status) {
@@ -1526,6 +1902,7 @@ function renderProfileActions(profile, status) {
     return `
       <button class="secondary-button" type="button" disabled>已关注</button>
       <button class="primary-button" type="button" data-action="open-direct-chat" data-character-id="${profile.id}">私信</button>
+      ${renderModerationActions(profile.id)}
     `;
   }
   if (status === "outgoing_pending") {
@@ -1534,7 +1911,48 @@ function renderProfileActions(profile, status) {
   if (status === "incoming_pending") {
     return `<button class="secondary-button" type="button" disabled>对方请求等待 GM 批准</button>`;
   }
-  return `<button class="primary-button" type="button" data-action="request-follow" data-character-id="${profile.id}">关注</button>`;
+  return `<button class="primary-button" type="button" data-action="request-follow" data-character-id="${profile.id}">关注</button>${renderModerationActions(profile.id)}`;
+}
+
+function renderModerationActions(targetId) {
+  if (isGmAdminMode() || isPreviewMode()) return "";
+  const muted = moderationEnabled(targetId, "mute");
+  const blocked = moderationEnabled(targetId, "block");
+  return `
+    <button class="ghost-button" type="button" data-action="toggle-moderation" data-character-id="${escapeAttr(targetId)}" data-moderation-type="mute">${muted ? "取消静音" : "静音"}</button>
+    <button class="danger-button" type="button" data-action="toggle-moderation" data-character-id="${escapeAttr(targetId)}" data-moderation-type="block">${blocked ? "取消屏蔽" : "屏蔽"}</button>
+  `;
+}
+
+function profileConnections(characterId, direction) {
+  const graph = stateBag.data?.socialGraph || (stateBag.data?.relationships || []).filter((relationship) => relationship.status === "accepted");
+  const ids = direction === "followers"
+    ? graph.filter((edge) => edge.targetId === characterId).map((edge) => edge.requesterId)
+    : graph.filter((edge) => edge.requesterId === characterId).map((edge) => edge.targetId);
+  return [...new Set(ids)].map((idValue) => getActor(idValue)).filter(Boolean);
+}
+
+function presenceFor(characterId) {
+  return (stateBag.data?.presence || []).find((entry) => entry.characterId === characterId) || {
+    characterId,
+    status: "offline",
+    statusText: "",
+    typingChatId: "",
+    lastSeenAt: ""
+  };
+}
+
+function presenceLabel(status) {
+  return ({ online: "在线", away: "离开", busy: "忙碌", offline: "离线" })[status] || "离线";
+}
+
+function renderPresenceIndicator(characterId) {
+  const presence = presenceFor(characterId);
+  return `<span class="presence-dot ${escapeAttr(presence.status)}" title="${escapeAttr(`${presenceLabel(presence.status)}${presence.statusText ? `：${presence.statusText}` : ""}`)}"></span>`;
+}
+
+function moderationEnabled(targetId, type) {
+  return (stateBag.data?.moderation || []).some((entry) => entry.targetId === targetId && entry.type === type);
 }
 
 function renderAccountTools() {
@@ -1576,7 +1994,8 @@ function renderAccountTools() {
 
   const actor = currentActor();
   const savedActors = availableActors();
-  const accountCreateForm = `
+  const signupEnabled = stateBag.data?.settings?.sessionControl?.signupEnabled !== false;
+  const accountCreateForm = signupEnabled ? `
     <div class="mini-form">
       <div class="mini-title">创建玩家账号</div>
       <input id="account-name" maxlength="40" placeholder="显示名">
@@ -1587,7 +2006,7 @@ function renderAccountTools() {
       </label>
       <button class="secondary-button" type="button" data-action="create-player-account">创建账号</button>
     </div>
-  `;
+  ` : `<div class="mini-form"><div class="mini-title">创建玩家账号</div><div class="hint">本场次已关闭自行注册，请使用 GM 提供的账号登录。</div></div>`;
   const loginForm = `
     <div class="mini-form">
       <div class="mini-title">登录已有账号</div>
@@ -2128,6 +2547,193 @@ function renderGmPlayerAccountManager(chars) {
   `;
 }
 
+function renderSessionControlPanel(chars, chats) {
+  const controls = stateBag.data.settings.sessionControl || {};
+  const mutedIds = new Set(controls.mutedCharacterIds || []);
+  const lockedChatIds = new Set(controls.lockedChatIds || []);
+  return `
+    <section class="gm-wide">
+      <div class="section-title">场次控制台</div>
+      <div class="session-control-grid">
+        <div class="session-toggle-grid">
+          ${[
+            ["session-read-only", "全站只读", controls.readOnly],
+            ["session-timeline-locked", "锁定时间线", controls.timelineLocked],
+            ["session-chat-locked", "锁定全部聊天", controls.chatLocked],
+            ["session-signup-enabled", "允许玩家自行注册", controls.signupEnabled !== false]
+          ].map(([idValue, label, checked]) => `<label class="checkbox-line"><input id="${idValue}" type="checkbox" ${checked ? "checked" : ""}><span>${label}</span></label>`).join("")}
+        </div>
+        <div class="two-col">
+          <label>慢速模式（秒） <input id="session-slow-mode" type="number" min="0" max="3600" value="${Number(controls.slowModeSeconds || 0)}"></label>
+          <label>消息编辑时限（分钟） <input id="session-edit-window" type="number" min="0" max="1440" value="${Number(controls.messageEditWindowMinutes || 15)}"></label>
+        </div>
+        <label>全站通知 <textarea id="session-announcement" maxlength="2000" placeholder="留空则不显示">${escapeHtml(controls.announcement || "")}</textarea></label>
+        <details class="control-details">
+          <summary>限制指定角色（${mutedIds.size}）</summary>
+          <div class="control-check-list">${chars.map((character) => `<label><input class="session-muted-character" type="checkbox" value="${escapeAttr(character.id)}" ${mutedIds.has(character.id) ? "checked" : ""}><span>${escapeHtml(character.name)}</span></label>`).join("")}</div>
+        </details>
+        <details class="control-details">
+          <summary>锁定指定聊天（${lockedChatIds.size}）</summary>
+          <div class="control-check-list">${chats.map((chat) => `<label><input class="session-locked-chat" type="checkbox" value="${escapeAttr(chat.id)}" ${lockedChatIds.has(chat.id) ? "checked" : ""}><span>${escapeHtml(chat.name)}</span></label>`).join("")}</div>
+        </details>
+        <button class="primary-button" type="button" data-action="save-session-control">保存场次控制</button>
+      </div>
+    </section>
+  `;
+}
+
+function renderPresenceManager(chars, chats) {
+  return `
+    <section class="gm-wide">
+      <div class="section-title">在线状态控制</div>
+      <div class="presence-manager-list">
+        ${chars.map((character) => {
+          const presence = presenceFor(character.id);
+          return `
+            <div class="presence-manager-row">
+              <div class="presence-character">${renderAvatar(character)}<span><strong>${escapeHtml(character.name)}</strong><small>${escapeHtml(character.handle || "")}</small></span></div>
+              <select id="presence-status-${escapeAttr(character.id)}">
+                ${["online", "away", "busy", "offline"].map((status) => `<option value="${status}" ${presence.status === status ? "selected" : ""}>${presenceLabel(status)}</option>`).join("")}
+              </select>
+              <input id="presence-text-${escapeAttr(character.id)}" maxlength="80" value="${escapeAttr(presence.statusText || "")}" placeholder="状态文字">
+              <select id="presence-typing-${escapeAttr(character.id)}">
+                <option value="">未输入</option>
+                ${chats.filter((chat) => chat.isPublic || chat.memberIds.includes(character.id)).map((chat) => `<option value="${escapeAttr(chat.id)}" ${presence.typingChatId === chat.id ? "selected" : ""}>正在输入：${escapeHtml(chat.name)}</option>`).join("")}
+              </select>
+              <button class="secondary-button compact-action" type="button" data-action="save-presence" data-character-id="${escapeAttr(character.id)}">保存</button>
+            </div>
+          `;
+        }).join("") || `<div class="hint padded">暂无角色。</div>`}
+      </div>
+    </section>
+  `;
+}
+
+function renderScheduledQueue(chars, chats, days) {
+  const items = stateBag.data.scheduledItems || [];
+  return `
+    <section class="gm-wide">
+      <div class="section-title">GM 计划发布队列</div>
+      <div class="scheduled-layout">
+        <div class="form-grid scheduled-composer">
+          <div class="three-col">
+            <label>类型
+              <select id="scheduled-type"><option value="post">时间线帖子</option><option value="message">聊天消息</option><option value="bulletin">学校公告</option><option value="platform_event">平台事件</option></select>
+            </label>
+            <label>日期 <select id="scheduled-day">${renderDayOptions(days, stateBag.data.settings.currentDayId)}</select></label>
+            <label>时间 <input id="scheduled-time" value="${escapeAttr(stateBag.data.settings.gameTime || "")}" placeholder="08:20"></label>
+          </div>
+          <div class="two-col">
+            <label>发言角色 <select id="scheduled-author"><option value="">系统 / 无</option>${chars.map((character) => `<option value="${escapeAttr(character.id)}">${escapeHtml(character.name)} ${escapeHtml(character.handle || "")}</option>`).join("")}</select></label>
+            <label>聊天目标 <select id="scheduled-chat"><option value="">不选择</option>${chats.map((chat) => `<option value="${escapeAttr(chat.id)}">${escapeHtml(chat.name)}</option>`).join("")}</select></label>
+          </div>
+          <div class="two-col">
+            <label>标题 / 投票问题 <input id="scheduled-title" maxlength="200"></label>
+            <label>子类型 <select id="scheduled-subtype"><option value="notice">系统通知</option><option value="school">学校公告</option><option value="rumor">校内传闻</option><option value="club">社团消息</option><option value="maintenance">维护</option><option value="outage">网络中断</option><option value="emergency">紧急通知</option></select></label>
+          </div>
+          <label>正文 <textarea id="scheduled-content" maxlength="5000"></textarea></label>
+          <label>投票选项 <textarea id="scheduled-poll-options" maxlength="800" placeholder="仅时间线投票使用；每行一个选项"></textarea></label>
+          <div class="form-row">
+            <label class="checkbox-line compact-checkbox"><input id="scheduled-anonymous" type="checkbox"><span>匿名</span></label>
+            <label class="checkbox-line compact-checkbox"><input id="scheduled-public" type="checkbox" checked><span>公开</span></label>
+            <label class="checkbox-line compact-checkbox"><input id="scheduled-blocking" type="checkbox"><span>阻断平台</span></label>
+          </div>
+          <button class="primary-button" type="button" data-action="create-scheduled-item">加入队列</button>
+        </div>
+        <div class="scheduled-list">
+          ${items.map((item) => `
+            <article class="scheduled-item ${escapeAttr(item.status)}">
+              <div><span class="type-pill">${escapeHtml(scheduledTypeLabel(item.type))}</span><strong>${escapeHtml(scheduledItemTitle(item))}</strong></div>
+              <div class="meta">${escapeHtml(dayOptionLabel(getCalendarDay(item.dayId)))} · ${escapeHtml(item.gameTime)} · ${escapeHtml(scheduledStatusLabel(item.status))}</div>
+              ${item.error ? `<div class="inline-error">${escapeHtml(item.error)}</div>` : ""}
+              <div class="row-actions">
+                ${item.status === "pending" ? `<button class="primary-button compact-action" type="button" data-action="run-scheduled-item" data-item-id="${escapeAttr(item.id)}">立即执行</button><button class="ghost-button compact-action" type="button" data-action="toggle-scheduled-item" data-item-id="${escapeAttr(item.id)}" data-status="cancelled">取消</button>` : ""}
+                ${item.status === "cancelled" ? `<button class="secondary-button compact-action" type="button" data-action="toggle-scheduled-item" data-item-id="${escapeAttr(item.id)}" data-status="pending">恢复</button>` : ""}
+                <button class="danger-button compact-action" type="button" data-action="delete-scheduled-item" data-item-id="${escapeAttr(item.id)}">删除</button>
+              </div>
+            </article>
+          `).join("") || `<div class="hint padded">队列为空。</div>`}
+        </div>
+      </div>
+    </section>
+  `;
+}
+
+function renderPlatformEventManager(chars) {
+  const events = stateBag.data.platformEvents || [];
+  return `
+    <section class="gm-wide">
+      <div class="section-title">临时平台事件</div>
+      <div class="platform-event-manager">
+        <div class="form-grid">
+          <div class="two-col"><label>类型 <select id="platform-event-type"><option value="notice">系统通知</option><option value="maintenance">维护</option><option value="outage">网络中断</option><option value="emergency">紧急通知</option><option value="suspension">账号限制</option></select></label><label>结束时间 <input id="platform-event-ends" type="datetime-local"></label></div>
+          <label>标题 <input id="platform-event-title" maxlength="100"></label>
+          <label>内容 <textarea id="platform-event-message" maxlength="2000"></textarea></label>
+          <label class="checkbox-line"><input id="platform-event-blocking" type="checkbox"><span>阻断受影响玩家使用平台</span></label>
+          <details class="control-details"><summary>仅影响指定角色（未选则全体）</summary><div class="control-check-list">${chars.map((character) => `<label><input class="platform-event-actor" type="checkbox" value="${escapeAttr(character.id)}"><span>${escapeHtml(character.name)}</span></label>`).join("")}</div></details>
+          <button class="primary-button" type="button" data-action="create-platform-event">立即启用</button>
+        </div>
+        <div class="platform-event-list">
+          ${events.map((event) => `<article class="platform-event-admin ${event.active ? "active" : "ended"}"><div><span class="type-pill">${escapeHtml(platformEventTypeLabel(event.type))}</span><strong>${escapeHtml(event.title)}</strong></div><div class="meta">${event.active ? "进行中" : "已结束"}${event.endsAt ? ` · 至 ${escapeHtml(formatDateTime(event.endsAt))}` : ""}${event.blocking ? " · 阻断" : ""}</div><div>${escapeHtml(event.message)}</div><div class="row-actions">${event.active ? `<button class="secondary-button compact-action" type="button" data-action="end-platform-event" data-event-id="${escapeAttr(event.id)}">结束</button>` : ""}<button class="danger-button compact-action" type="button" data-action="delete-platform-event" data-event-id="${escapeAttr(event.id)}">删除</button></div></article>`).join("") || `<div class="hint padded">暂无平台事件。</div>`}
+        </div>
+      </div>
+    </section>
+  `;
+}
+
+function renderGmNotes(chars, chats) {
+  const notes = stateBag.data.gmNotes || [];
+  const postOptions = sortTimelinePosts(stateBag.data.posts || []).slice(0, 50);
+  return `
+    <section class="gm-wide">
+      <div class="section-title">GM 私密笔记</div>
+      <div class="gm-notes-layout">
+        <div class="form-grid">
+          <label>关联对象 <select id="gm-note-target">${chars.map((character) => `<option value="character|${escapeAttr(character.id)}">角色：${escapeHtml(character.name)}</option>`).join("")}${chats.map((chat) => `<option value="chat|${escapeAttr(chat.id)}">聊天：${escapeHtml(chat.name)}</option>`).join("")}${postOptions.map((post) => `<option value="post|${escapeAttr(post.id)}">帖子：${escapeHtml(messageSummary(post))}</option>`).join("")}</select></label>
+          <label>笔记 <textarea id="gm-note-content" maxlength="2000"></textarea></label>
+          <button class="primary-button" type="button" data-action="save-gm-note">保存 / 更新</button>
+        </div>
+        <div class="gm-note-list">${notes.map((note) => `<article><div><span class="type-pill">${escapeHtml(note.targetType)}</span><strong>${escapeHtml(gmNoteTargetLabel(note))}</strong></div><div>${formatText(note.content)}</div><div class="meta">${escapeHtml(formatDateTime(note.updatedAt))}</div><button class="danger-button compact-action" type="button" data-action="delete-gm-note" data-note-id="${escapeAttr(note.id)}">删除</button></article>`).join("") || `<div class="hint padded">暂无私密笔记。</div>`}</div>
+      </div>
+    </section>
+  `;
+}
+
+function renderOffsiteBackupPanel() {
+  const status = stateBag.data.systemStatus?.offsiteBackup || {};
+  return `
+    <section>
+      <div class="section-title">自动站外备份</div>
+      <div class="backup-status ${status.lastError ? "error" : ""}">
+        <strong>${status.configured ? "已配置" : "未配置"}</strong>
+        <span>${status.intervalMinutes ? `每 ${status.intervalMinutes} 分钟` : "未启用自动周期"}</span>
+        <span>上次成功：${status.lastSuccessAt ? escapeHtml(formatDateTime(status.lastSuccessAt)) : "尚无"}</span>
+        ${status.lastError ? `<span class="inline-error">${escapeHtml(status.lastError)}</span>` : ""}
+        <button class="primary-button" type="button" data-action="run-offsite-backup" ${status.configured ? "" : "disabled"}>立即备份到站外</button>
+      </div>
+    </section>
+  `;
+}
+
+function scheduledTypeLabel(type) {
+  return ({ post: "时间线", message: "聊天", bulletin: "公告", platform_event: "平台事件" })[type] || type;
+}
+
+function scheduledStatusLabel(status) {
+  return ({ pending: "等待中", completed: "已执行", cancelled: "已取消", failed: "失败" })[status] || status;
+}
+
+function scheduledItemTitle(item) {
+  return String(item.payload?.title || item.payload?.question || item.payload?.content || "未命名项目").slice(0, 80);
+}
+
+function gmNoteTargetLabel(note) {
+  if (note.targetType === "character") return getActor(note.targetId)?.name || "已删除角色";
+  if (note.targetType === "chat") return getChat(note.targetId)?.name || "已删除聊天";
+  const post = (stateBag.data.posts || []).find((entry) => entry.id === note.targetId);
+  return messageSummary(post);
+}
+
 function renderGmSection(idValue, title, content, options = {}) {
   const collapsed = stateBag.gmCollapsedSections[idValue] === true;
   return `
@@ -2228,6 +2834,7 @@ function renderGm() {
   }
 
   const chars = stateBag.data.characters.filter((item) => item.active !== false);
+  const chats = stateBag.data.chats || [];
   const deletableRosterChars = chars.filter((item) => item.type !== "account");
   const rosterTags = [...new Set(chars.flatMap((character) => characterTags(character)))]
     .sort((a, b) => a.localeCompare(b, "zh-CN"));
@@ -2271,7 +2878,13 @@ function renderGm() {
         </div>
       </section>
 
+      ${renderSessionControlPanel(chars, chats)}
       ${renderGmInbox()}
+      ${renderScheduledQueue(chars, chats, days)}
+      ${renderPlatformEventManager(chars)}
+      ${renderPresenceManager(chars, chats)}
+      ${renderGmNotes(chars, chats)}
+      ${renderOffsiteBackupPanel()}
       ${renderGmEmojiManager()}
       ${renderBulletinComposer(chars, days)}
       ${renderCalendarEventManager(days, gmDay)}
@@ -2448,22 +3061,37 @@ async function publishPost() {
   const content = textarea?.value.trim() || "";
   const imageInput = document.getElementById("post-image");
   const anonymousInput = document.getElementById("post-anonymous");
+  const pollQuestion = document.getElementById("post-poll-question")?.value.trim() || "";
+  const pollOptions = (document.getElementById("post-poll-options")?.value || "")
+    .split(/\r?\n/)
+    .map((option) => option.trim())
+    .filter(Boolean);
+  const poll = pollQuestion || pollOptions.length
+    ? { question: pollQuestion, options: pollOptions.map((text) => ({ text })), multiple: document.getElementById("post-poll-multiple")?.checked === true }
+    : null;
   const imageFile = imageInput?.files?.[0];
   const attachment = imageFile
     ? { type: "image", dataUrl: await fileToImageDataUrl(imageFile, 1400, 0.86, 8500000), name: imageFile.name }
     : null;
-  if (!content && !attachment) return showNotice("帖子内容或图片为空。");
+  if (poll && (!pollQuestion || pollOptions.length < 2)) return showNotice("投票需要一个问题和至少两个选项。");
+  if (!content && !attachment && !poll) return showNotice("帖子内容、图片或投票不能为空。");
   if (content.length > 2000) return showNotice("时间线帖子最多 2000 字。");
   await api("/api/feed/posts", {
     method: "POST",
-    body: { authorId: stateBag.actorId, content, attachment, isAnonymous: anonymousInput?.checked === true }
+    body: { authorId: stateBag.actorId, content, attachment, poll, isAnonymous: anonymousInput?.checked === true }
   });
   textarea.value = "";
   if (imageInput) imageInput.value = "";
   if (anonymousInput) anonymousInput.checked = false;
+  stateBag.pollComposerOpen = false;
   const hint = document.getElementById("post-image-hint");
   if (hint) hint.textContent = "未选择图片";
   await refresh(true);
+}
+
+function togglePollComposer() {
+  stateBag.pollComposerOpen = !stateBag.pollComposerOpen;
+  renderFeed();
 }
 
 async function likePost(postId) {
@@ -2473,6 +3101,50 @@ async function likePost(postId) {
     body: { actorId: stateBag.actorId }
   });
   await refresh(true);
+}
+
+async function bookmarkPost(postId) {
+  if (!currentActor()) return showNotice("请先创建或选择玩家账号。");
+  stateBag.data = await api(`/api/feed/posts/${encodeURIComponent(postId)}/bookmark`, {
+    method: "POST",
+    body: { actorId: stateBag.actorId }
+  });
+  render();
+}
+
+function toggleQuotePost(postId) {
+  stateBag.openQuotePostId = stateBag.openQuotePostId === postId ? "" : postId;
+  renderFeed();
+}
+
+async function repostPost(postId, withQuote) {
+  if (!currentActor()) return showNotice("请先创建或选择玩家账号。");
+  let content = "";
+  let isAnonymous = false;
+  if (withQuote) {
+    content = document.getElementById(`quote-${postId}`)?.value.trim() || "";
+    isAnonymous = document.getElementById(`quote-${postId}-anonymous`)?.checked === true;
+    if (!content) return showNotice("请输入引用文字；直接转发可使用“转发”按钮。");
+  } else if (!window.confirm("转发这条帖子？")) {
+    return;
+  }
+  stateBag.data = await api(`/api/feed/posts/${encodeURIComponent(postId)}/repost`, {
+    method: "POST",
+    body: { actorId: stateBag.actorId, content, isAnonymous }
+  });
+  stateBag.openQuotePostId = "";
+  render();
+}
+
+async function votePoll(postId) {
+  if (!currentActor()) return showNotice("请先创建或选择玩家账号。");
+  const optionIds = Array.from(document.querySelectorAll(`input[name="poll-${CSS.escape(postId)}"]:checked`)).map((input) => input.value);
+  if (!optionIds.length) return showNotice("请选择投票选项。");
+  stateBag.data = await api(`/api/feed/posts/${encodeURIComponent(postId)}/vote`, {
+    method: "POST",
+    body: { actorId: stateBag.actorId, optionIds }
+  });
+  render();
 }
 
 function toggleReplyComposer(postId, parentReplyId = "") {
@@ -2491,7 +3163,7 @@ function setFeedFilter(filter) {
 }
 
 function normalizeFeedFilter(filter) {
-  return ["all", "mine", "anonymous", "images"].includes(filter) ? filter : "all";
+  return ["all", "mine", "bookmarked", "anonymous", "images"].includes(filter) ? filter : "all";
 }
 
 function setFeedHashtag(hashtag) {
@@ -2561,12 +3233,19 @@ async function deletePost(postId) {
 
 async function deleteMessage(messageId) {
   if (!messageId) return;
-  await api(`/api/messages/${encodeURIComponent(messageId)}`, {
+  const message = (stateBag.data?.messages || []).find((entry) => entry.id === messageId);
+  const hardDelete = isGmAdminMode();
+  if (!hardDelete && !canModifyMessage(message)) return showNotice("这条消息已经超过可编辑或撤回时间。");
+  if (!window.confirm(hardDelete ? "永久删除这条消息？" : "撤回这条消息？")) return;
+  stateBag.data = await api(`/api/messages/${encodeURIComponent(messageId)}`, {
     method: "DELETE",
-    admin: true
+    admin: hardDelete,
+    body: { actorId: stateBag.actorId }
   });
-  showNotice("消息已删除。需要的话可以用 GM 撤销。");
-  await refresh(true);
+  if (stateBag.messageReplyToId === messageId) stateBag.messageReplyToId = "";
+  if (stateBag.editingMessageId === messageId) cancelEditMessage(false);
+  showNotice(hardDelete ? "消息已删除。需要的话可以用 GM 撤销。" : "消息已撤回。");
+  render();
 }
 
 async function deleteChat(chatId) {
@@ -2595,6 +3274,9 @@ function openGmChat(chatId) {
 
 function selectChat(chatId) {
   stateBag.activeChatId = chatId;
+  stateBag.messageReplyToId = "";
+  stateBag.editingMessageId = "";
+  stateBag.messageDraft = "";
   localStorage.setItem("kokubayashi.chatId", chatId);
   renderChats();
 }
@@ -2628,20 +3310,100 @@ async function sendMessage() {
   const imageInput = document.getElementById("message-image");
   const imageFile = imageInput?.files?.[0];
   const anonymousInput = document.getElementById("message-anonymous");
+  const editingMessage = (stateBag.data.messages || []).find((message) => message.id === stateBag.editingMessageId);
+  if (editingMessage) {
+    stateBag.data = await api(`/api/messages/${encodeURIComponent(editingMessage.id)}`, {
+      method: "PATCH",
+      body: { actorId: stateBag.actorId, content },
+      admin: isGmAdminMode()
+    });
+    stateBag.editingMessageId = "";
+    stateBag.messageDraft = "";
+    showNotice("消息已编辑。");
+    render();
+    return;
+  }
   const attachment = imageFile
     ? { type: "image", dataUrl: await fileToImageDataUrl(imageFile, 1400, 0.86, 8500000), name: imageFile.name }
     : null;
   if (!content && !attachment) return showNotice("消息内容或图片为空。");
   await api("/api/messages", {
     method: "POST",
-    body: { chatId: stateBag.activeChatId, authorId: stateBag.actorId, content, attachment, isAnonymous: anonymousInput?.checked === true }
+    body: {
+      chatId: stateBag.activeChatId,
+      authorId: stateBag.actorId,
+      content,
+      attachment,
+      replyToMessageId: stateBag.messageReplyToId,
+      isAnonymous: anonymousInput?.checked === true
+    }
   });
   textarea.value = "";
+  stateBag.messageDraft = "";
+  stateBag.messageReplyToId = "";
   if (imageInput) imageInput.value = "";
   if (anonymousInput) anonymousInput.checked = false;
   const hint = document.getElementById("message-image-hint");
   if (hint) hint.textContent = "未选择图片";
   await refresh(true);
+}
+
+function setMessageReply(messageId) {
+  stateBag.messageDraft = document.getElementById("message-content")?.value || stateBag.messageDraft;
+  stateBag.messageReplyToId = messageId || "";
+  stateBag.editingMessageId = "";
+  renderChats();
+  setTimeout(() => document.getElementById("message-content")?.focus(), 0);
+}
+
+function startEditMessage(messageId) {
+  const message = (stateBag.data?.messages || []).find((entry) => entry.id === messageId);
+  if (!message || !canModifyMessage(message)) return showNotice("这条消息已经不能编辑。");
+  stateBag.editingMessageId = message.id;
+  stateBag.messageReplyToId = "";
+  stateBag.messageDraft = message.content || "";
+  renderChats();
+  setTimeout(() => {
+    const textarea = document.getElementById("message-content");
+    textarea?.focus();
+    textarea?.setSelectionRange(textarea.value.length, textarea.value.length);
+  }, 0);
+}
+
+function cancelEditMessage(shouldRender = true) {
+  stateBag.editingMessageId = "";
+  stateBag.messageDraft = "";
+  if (shouldRender) renderChats();
+}
+
+async function reactMessage(messageId, reaction) {
+  if (!currentActor()) return showNotice("请先创建或选择玩家账号。");
+  stateBag.data = await api(`/api/messages/${encodeURIComponent(messageId)}/reaction`, {
+    method: "POST",
+    body: { actorId: stateBag.actorId, reaction }
+  });
+  render();
+}
+
+async function pinMessage(messageId) {
+  stateBag.data = await api(`/api/messages/${encodeURIComponent(messageId)}/pin`, {
+    method: "POST",
+    body: { actorId: stateBag.actorId },
+    admin: isGmAdminMode()
+  });
+  render();
+}
+
+function jumpToMessage(messageId) {
+  const activeMessages = indexedMessages().byChat.get(stateBag.activeChatId) || [];
+  const index = activeMessages.findIndex((message) => message.id === messageId);
+  if (index < 0) return;
+  const required = activeMessages.length - index;
+  if ((stateBag.chatMessageLimits[stateBag.activeChatId] || 100) < required) {
+    stateBag.chatMessageLimits[stateBag.activeChatId] = required + 20;
+    renderChats();
+  }
+  setTimeout(() => document.querySelector(`[data-message-id="${CSS.escape(messageId)}"]`)?.scrollIntoView({ block: "center", behavior: "smooth" }), 0);
 }
 
 async function unlockGm() {
@@ -2731,6 +3493,165 @@ async function restoreGmBackup() {
   ensureActor();
   ensureChat();
   showNotice("备份已恢复。");
+  render();
+}
+
+async function runOffsiteBackup() {
+  showNotice("正在创建并发送站外备份...");
+  await api("/api/gm/offsite-backup", { method: "POST", admin: true });
+  showNotice("站外备份已完成。");
+  await refresh(true);
+}
+
+async function saveSessionControl() {
+  const mutedCharacterIds = Array.from(document.querySelectorAll(".session-muted-character:checked")).map((input) => input.value);
+  const lockedChatIds = Array.from(document.querySelectorAll(".session-locked-chat:checked")).map((input) => input.value);
+  stateBag.data = await api("/api/gm/session-control", {
+    method: "PATCH",
+    admin: true,
+    body: {
+      readOnly: document.getElementById("session-read-only")?.checked === true,
+      timelineLocked: document.getElementById("session-timeline-locked")?.checked === true,
+      chatLocked: document.getElementById("session-chat-locked")?.checked === true,
+      signupEnabled: document.getElementById("session-signup-enabled")?.checked === true,
+      slowModeSeconds: document.getElementById("session-slow-mode")?.value,
+      messageEditWindowMinutes: document.getElementById("session-edit-window")?.value,
+      announcement: document.getElementById("session-announcement")?.value,
+      mutedCharacterIds,
+      lockedChatIds
+    }
+  });
+  showNotice("场次控制已更新。");
+  render();
+}
+
+async function savePresence(characterId) {
+  const status = document.getElementById(`presence-status-${characterId}`)?.value || "offline";
+  stateBag.data = await api(`/api/gm/presence/${encodeURIComponent(characterId)}`, {
+    method: "PATCH",
+    admin: true,
+    body: {
+      status,
+      statusText: document.getElementById(`presence-text-${characterId}`)?.value || "",
+      typingChatId: status === "offline" ? "" : (document.getElementById(`presence-typing-${characterId}`)?.value || ""),
+      ...(status === "offline" ? { lastSeenAt: new Date().toISOString() } : {})
+    }
+  });
+  showNotice("在线状态已更新。");
+  render();
+}
+
+async function createPlatformEvent() {
+  const endsValue = document.getElementById("platform-event-ends")?.value || "";
+  const affectedActorIds = Array.from(document.querySelectorAll(".platform-event-actor:checked")).map((input) => input.value);
+  const title = document.getElementById("platform-event-title")?.value.trim() || "";
+  const message = document.getElementById("platform-event-message")?.value.trim() || "";
+  if (!title && !message) return showNotice("请输入平台事件标题或内容。");
+  stateBag.data = await api("/api/gm/platform-events", {
+    method: "POST",
+    admin: true,
+    body: {
+      type: document.getElementById("platform-event-type")?.value,
+      title,
+      message,
+      blocking: document.getElementById("platform-event-blocking")?.checked === true,
+      affectedActorIds,
+      endsAt: endsValue ? new Date(endsValue).toISOString() : ""
+    }
+  });
+  showNotice("平台事件已启用。");
+  render();
+}
+
+async function endPlatformEvent(eventId) {
+  stateBag.data = await api(`/api/gm/platform-events/${encodeURIComponent(eventId)}`, {
+    method: "PATCH",
+    admin: true,
+    body: { active: false }
+  });
+  showNotice("平台事件已结束。");
+  render();
+}
+
+async function deletePlatformEvent(eventId) {
+  if (!window.confirm("删除这条平台事件记录？")) return;
+  stateBag.data = await api(`/api/gm/platform-events/${encodeURIComponent(eventId)}`, {
+    method: "DELETE",
+    admin: true
+  });
+  render();
+}
+
+async function createScheduledItem() {
+  const type = document.getElementById("scheduled-type")?.value || "post";
+  const authorId = document.getElementById("scheduled-author")?.value || "";
+  const chatId = document.getElementById("scheduled-chat")?.value || "";
+  const title = document.getElementById("scheduled-title")?.value.trim() || "";
+  const content = document.getElementById("scheduled-content")?.value.trim() || "";
+  const subtype = document.getElementById("scheduled-subtype")?.value || "notice";
+  const pollOptions = (document.getElementById("scheduled-poll-options")?.value || "").split(/\r?\n/).map((value) => value.trim()).filter(Boolean);
+  let payload;
+  if (type === "post") {
+    if (!authorId) return showNotice("计划帖子需要发言角色。");
+    payload = { authorId, content, isAnonymous: document.getElementById("scheduled-anonymous")?.checked === true };
+    if (title || pollOptions.length) {
+      if (!title || pollOptions.length < 2) return showNotice("计划投票需要问题和至少两个选项。");
+      payload.poll = { question: title, options: pollOptions.map((text) => ({ text })) };
+    }
+  } else if (type === "message") {
+    if (!authorId || !chatId) return showNotice("计划消息需要发言角色与聊天目标。");
+    payload = { authorId, chatId, content, isAnonymous: document.getElementById("scheduled-anonymous")?.checked === true };
+  } else if (type === "bulletin") {
+    payload = { title, content, authorId, type: subtype, isPublic: document.getElementById("scheduled-public")?.checked === true };
+  } else {
+    payload = { title, message: content, type: subtype, blocking: document.getElementById("scheduled-blocking")?.checked === true };
+  }
+  stateBag.data = await api("/api/gm/scheduled-items", {
+    method: "POST",
+    admin: true,
+    body: {
+      type,
+      dayId: document.getElementById("scheduled-day")?.value,
+      gameTime: document.getElementById("scheduled-time")?.value,
+      payload
+    }
+  });
+  showNotice("已加入计划发布队列。");
+  render();
+}
+
+async function runScheduledItem(itemId) {
+  stateBag.data = await api(`/api/gm/scheduled-items/${encodeURIComponent(itemId)}/run`, { method: "POST", admin: true });
+  showNotice("计划项目已执行。");
+  render();
+}
+
+async function toggleScheduledItem(itemId, status) {
+  stateBag.data = await api(`/api/gm/scheduled-items/${encodeURIComponent(itemId)}`, {
+    method: "PATCH",
+    admin: true,
+    body: { status }
+  });
+  render();
+}
+
+async function deleteScheduledItem(itemId) {
+  if (!window.confirm("删除这个计划项目？")) return;
+  stateBag.data = await api(`/api/gm/scheduled-items/${encodeURIComponent(itemId)}`, { method: "DELETE", admin: true });
+  render();
+}
+
+async function saveGmNote() {
+  const [targetType, targetId] = String(document.getElementById("gm-note-target")?.value || "").split("|");
+  const content = document.getElementById("gm-note-content")?.value.trim() || "";
+  if (!targetId || !content) return showNotice("请选择关联对象并填写笔记。");
+  stateBag.data = await api("/api/gm/notes", { method: "POST", admin: true, body: { targetType, targetId, content } });
+  showNotice("GM 笔记已保存。");
+  render();
+}
+
+async function deleteGmNote(noteId) {
+  stateBag.data = await api(`/api/gm/notes/${encodeURIComponent(noteId)}`, { method: "DELETE", admin: true });
   render();
 }
 
@@ -3423,11 +4344,68 @@ function setRosterTag(tag) {
 function viewProfile(characterId) {
   if (!characterId || !getActor(characterId)) return;
   stateBag.profileId = characterId;
+  stateBag.profileEditOpen = false;
   render();
 }
 
 function closeProfile() {
   stateBag.profileId = "";
+  stateBag.profileEditOpen = false;
+  render();
+}
+
+function toggleProfileEdit() {
+  if (currentActor()?.id !== stateBag.profileId || isPreviewMode()) return;
+  stateBag.profileEditOpen = !stateBag.profileEditOpen;
+  render();
+}
+
+async function saveOwnProfile() {
+  const actor = currentActor();
+  if (!actor || actor.id !== stateBag.profileId || isPreviewMode()) return;
+  const avatarFile = document.getElementById("profile-edit-avatar")?.files?.[0];
+  const bannerFile = document.getElementById("profile-edit-banner")?.files?.[0];
+  const body = {
+    name: document.getElementById("profile-edit-name")?.value,
+    handle: document.getElementById("profile-edit-handle")?.value,
+    bio: document.getElementById("profile-edit-bio")?.value,
+    location: document.getElementById("profile-edit-location")?.value,
+    birthday: document.getElementById("profile-edit-birthday")?.value,
+    pinnedPostId: document.getElementById("profile-edit-pinned-post")?.value || ""
+  };
+  if (avatarFile) body.avatarData = await fileToImageDataUrl(avatarFile, 720, 0.88, 4500000);
+  if (bannerFile) body.bannerData = await fileToImageDataUrl(bannerFile, 1600, 0.86, 8500000);
+  const path = isGmAdminMode()
+    ? `/api/characters/${encodeURIComponent(actor.id)}`
+    : `/api/player-accounts/${encodeURIComponent(actor.id)}`;
+  stateBag.data = await api(path, { method: "PATCH", body, admin: isGmAdminMode() });
+  stateBag.profileEditOpen = false;
+  showNotice("个人资料已更新。");
+  render();
+}
+
+async function pinProfilePost(postId) {
+  const actor = currentActor();
+  if (!actor || isPreviewMode()) return;
+  const path = isGmAdminMode()
+    ? `/api/characters/${encodeURIComponent(actor.id)}`
+    : `/api/player-accounts/${encodeURIComponent(actor.id)}`;
+  stateBag.data = await api(path, {
+    method: "PATCH",
+    body: { pinnedPostId: postId || "" },
+    admin: isGmAdminMode()
+  });
+  render();
+}
+
+async function toggleModeration(targetId, type) {
+  if (!currentActor() || !targetId || isPreviewMode()) return;
+  if (type === "block" && !moderationEnabled(targetId, type) && !window.confirm("屏蔽后，你们将无法互相关注或私信，同时对方内容会从你的视图隐藏。继续吗？")) return;
+  stateBag.data = await api("/api/moderation", {
+    method: "POST",
+    body: { actorId: stateBag.actorId, targetId, type }
+  });
+  showNotice(moderationEnabled(targetId, type) ? (type === "block" ? "已屏蔽。" : "已静音。") : (type === "block" ? "已取消屏蔽。" : "已取消静音。"));
   render();
 }
 
@@ -4053,7 +5031,7 @@ function renderMemberProfileLinks(chat) {
   if (!members.length) return "";
   return members.map((member) => `
     <button class="member-link" type="button" data-action="view-profile" data-character-id="${member.id}">
-      ${escapeHtml(member.name)}
+      ${renderPresenceIndicator(member.id)}${escapeHtml(member.name)}
     </button>
   `).join("");
 }
