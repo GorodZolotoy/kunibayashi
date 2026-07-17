@@ -40,6 +40,12 @@ test("SNS, integrated chat, scheduling, presence, and session APIs work together
   assert.equal(actors.length, 2);
   const [author, participant] = actors;
 
+  state = await request("/api/emojis", "POST", {
+    shortcode: "gm_qa",
+    imageData: "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII="
+  });
+  assert.equal(state.emojis.some((emoji) => emoji.shortcode === "gm_qa"), true);
+
   const postIdsBefore = new Set(state.posts.map((post) => post.id));
   state = await request("/api/feed/posts", "POST", {
     authorId: author.id,

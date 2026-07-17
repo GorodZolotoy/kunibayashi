@@ -2046,6 +2046,7 @@ function renderAccountTools() {
       <label class="file-picker">上传图片
         <input id="emoji-file" type="file" accept="image/*">
       </label>
+      <span id="emoji-file-hint" class="hint">未选择图片</span>
       <button class="secondary-button" type="button" data-action="upload-emoji">上传 Emoji</button>
     </div>
   `;
@@ -2129,9 +2130,23 @@ function renderChatMemberRequest(request) {
 
 function renderGmEmojiManager() {
   const emojis = stateBag.data?.emojis || [];
+  const owners = (stateBag.data?.characters || []).filter((character) => character.active !== false);
   return `
     <section>
       <div class="section-title">自定义 Emoji</div>
+      <div class="mini-form emoji-upload-form">
+        <div class="mini-title">GM 上传</div>
+        <input id="emoji-shortcode" maxlength="24" placeholder="shortcode（英文字母、数字、- 或 _）">
+        <select id="emoji-owner" aria-label="Emoji 归属账号">
+          <option value="">全校通用（GM）</option>
+          ${owners.map((owner) => `<option value="${escapeAttr(owner.id)}">${escapeHtml(owner.name)} ${escapeHtml(owner.handle || "")}</option>`).join("")}
+        </select>
+        <label class="file-picker">选择图片
+          <input id="emoji-file" type="file" accept="image/*">
+        </label>
+        <span id="emoji-file-hint" class="hint">未选择图片</span>
+        <button class="primary-button" type="button" data-action="upload-emoji">上传 Emoji</button>
+      </div>
       <div class="emoji-manager-list">
         ${emojis.map((emoji) => {
           const owner = getActor(emoji.ownerId);
@@ -2141,7 +2156,7 @@ function renderGmEmojiManager() {
                 <img src="${escapeAttr(emoji.imageData)}" alt=":${escapeAttr(emoji.shortcode)}:">
                 <div class="name-block">
                   <div class="name">:${escapeHtml(emoji.shortcode)}:</div>
-                  <div class="handle">${escapeHtml(owner ? `${owner.name} ${owner.handle || ""}` : "GM / unknown")}</div>
+                  <div class="handle">${escapeHtml(owner ? `${owner.name} ${owner.handle || ""}` : "全校通用（GM）")}</div>
                 </div>
               </div>
               <button class="danger-button compact-action" type="button" data-action="delete-emoji" data-emoji-id="${escapeAttr(emoji.id)}">删除</button>
@@ -4240,16 +4255,22 @@ async function updateAvatar() {
 }
 
 async function uploadEmoji() {
-  if (!currentActor()) return showNotice("请先选择玩家账号。");
+  const gmUpload = isGmAdminMode();
+  const actor = currentActor();
+  if (!gmUpload && !actor) return showNotice("请先选择玩家账号。");
   const shortcode = document.getElementById("emoji-shortcode")?.value.trim();
   const file = document.getElementById("emoji-file")?.files?.[0];
   if (!shortcode) return showNotice("请输入 emoji shortcode。");
   if (!file) return showNotice("请选择 emoji 图片。");
   const imageData = await fileToImageDataUrl(file, 128, 0.9, 900000);
+  const ownerId = gmUpload
+    ? (document.getElementById("emoji-owner")?.value || "")
+    : actor.id;
   await api("/api/emojis", {
     method: "POST",
+    admin: gmUpload,
     body: {
-      ownerId: stateBag.actorId,
+      ownerId,
       shortcode,
       imageData
     }
